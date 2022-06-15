@@ -17,7 +17,7 @@
 
 from urllib.parse import quote_plus
 
-from airflow.providers.amazon.aws.links.base_aws import BASE_AWS_CONSOLE_LINK, BaseAwsLink
+from airflow.providers.amazon.aws.links.base_aws import BaseAwsLink
 
 
 class CloudWatchEventsLink(BaseAwsLink):
@@ -26,9 +26,8 @@ class CloudWatchEventsLink(BaseAwsLink):
     name = "CloudWatch Events"
     key = "cloudwatch_events"
     format_str = (
-        BASE_AWS_CONSOLE_LINK
-        + "/cloudwatch/home?region={awslogs_region}#logsV2:log-groups/log-group/{awslogs_group}"
-        + "/log-events/{awslogs_stream_name}"
+        "{AWS_CONSOLE_LINK}/cloudwatch/home?region={awslogs_region}#logsV2:"
+        "log-groups/log-group/{awslogs_group}/log-events/{awslogs_stream_name}"
     )
 
     def format_link(self, **kwargs) -> str:

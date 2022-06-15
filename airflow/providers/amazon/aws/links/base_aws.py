@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, Optional
 
 from airflow.models import BaseOperatorLink, XCom
+from airflow.providers.amazon.aws.utils.helpers import resolve_aws_partition
 
 if TYPE_CHECKING:
     from airflow.models import BaseOperator
@@ -27,7 +28,12 @@ if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-BASE_AWS_CONSOLE_LINK = "https://console.{aws_domain}"
+DEFAULT_AWS_PARTITION = "aws"
+AWS_CONSOLE_DOMAINS = {
+    "aws": "aws.amazon.com",
+    "aws-cn": "amazonaws.cn",
+    "aws-us-gov": "amazonaws-us-gov.com",
+}
 
 
 class BaseAwsLink(BaseOperatorLink):
@@ -37,17 +43,6 @@ class BaseAwsLink(BaseOperatorLink):
     key: ClassVar[str]
     format_str: ClassVar[str]
 
-    @staticmethod
-    def get_aws_domain(aws_partition) -> Optional[str]:
-        if aws_partition == "aws":
-            return "aws.amazon.com"
-        elif aws_partition == "aws-cn":
-            return "amazonaws.cn"
-        elif aws_partition == "aws-us-gov":
-            return "amazonaws-us-gov.com"
-
-        return None
-
     def format_link(self, **kwargs) -> str:
         """
         Format AWS Service Link
@@ -55,10 +50,7 @@ class BaseAwsLink(BaseOperatorLink):
         Some AWS Service Link should require additional escaping
         in this case this method should be overridden.
         """
-        try:
-            return self.format_str.format(**kwargs)
-        except KeyError:
-            return ""
+        return self.format_str.format(**kwargs)
 
     def get_link(
         self,
@@ -86,22 +78,38 @@ class BaseAwsLink(BaseOperatorLink):
                 execution_date=dttm,
             )
 
-        return self.format_link(**conf) if conf else ""
+        if not conf:
+            return ""
+
+        try:
+            aws_partition = conf.get("aws_partition", DEFAULT_AWS_PARTITION)
+            conf["AWS_CONSOLE_LINK"] = f"https://console.{AWS_CONSOLE_DOMAINS[aws_partition]}"
+            return self.format_link(**conf)
+        except Exception:
+            return ""
 
     @classmethod
     def persist(
-        cls, context: "Context", operator: "BaseOperator", region_name: str, aws_partition: str, **kwargs
+        cls,
+        context: "Context",
+        operator: "BaseOperator",
+        region_name: str,
+        aws_partition: Optional[str] = None,
+        **kwargs,
     ) -> None:
         """Store link information into XCom"""
         if not operator.do_xcom_push:
             return
+
+        if not region_name:
+            raise ValueError("'region_name' should be provided.")
 
         operator.xcom_push(
             context,
             key=cls.key,
             value={
                 "region_name": region_name,
-                "aws_domain": cls.get_aws_domain(aws_partition),
+                "aws_partition": resolve_aws_partition(region_name, aws_partition),
                 **kwargs,
             },
         )

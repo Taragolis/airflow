@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from airflow.providers.amazon.aws.links.base_aws import BASE_AWS_CONSOLE_LINK, BaseAwsLink
+from airflow.providers.amazon.aws.links.base_aws import BaseAwsLink
 
 
 class EmrClusterLink(BaseAwsLink):
@@ -23,6 +23,4 @@ class EmrClusterLink(BaseAwsLink):
 
     name = "EMR Cluster"
     key = "emr_cluster"
-    format_str = (
-        BASE_AWS_CONSOLE_LINK + "/elasticmapreduce/home?region={region_name}#cluster-details:{job_flow_id}"
-    )
+    format_str = "{AWS_CONSOLE_LINK}/elasticmapreduce/home?region={region_name}#cluster-details:{job_flow_id}"

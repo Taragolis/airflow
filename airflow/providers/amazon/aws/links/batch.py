@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from airflow.providers.amazon.aws.links.base_aws import BASE_AWS_CONSOLE_LINK, BaseAwsLink
+from airflow.providers.amazon.aws.links.base_aws import BaseAwsLink
 
 
 class BatchJobDefinitionLink(BaseAwsLink):
@@ -24,7 +24,7 @@ class BatchJobDefinitionLink(BaseAwsLink):
     name = "Batch Job Definition"
     key = "batch_job_definition"
     format_str = (
-        BASE_AWS_CONSOLE_LINK + "/batch/home?region={region_name}#job-definition/detail/{job_definition_arn}"
+        "{AWS_CONSOLE_LINK}/batch/home?region={region_name}#job-definition/detail/{job_definition_arn}"
     )
 
 
@@ -33,7 +33,7 @@ class BatchJobDetailsLink(BaseAwsLink):
 
     name = "Batch Job Details"
     key = "batch_job_details"
-    format_str = BASE_AWS_CONSOLE_LINK + "/batch/home?region={region_name}#jobs/detail/{job_id}"
+    format_str = "{AWS_CONSOLE_LINK}/batch/home?region={region_name}#jobs/detail/{job_id}"
 
 
 class BatchJobQueueLink(BaseAwsLink):
@@ -41,4 +41,4 @@ class BatchJobQueueLink(BaseAwsLink):
 
     name = "Batch Job Queue"
     key = "batch_job_queue"
-    format_str = BASE_AWS_CONSOLE_LINK + "/batch/home?region={region_name}#queues/detail/{job_queue_arn}"
+    format_str = "{AWS_CONSOLE_LINK}/batch/home?region={region_name}#queues/detail/{job_queue_arn}"

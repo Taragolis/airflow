@@ -32,7 +32,7 @@ from airflow.serialization.serialized_objects import SerializedDAG
 TASK_ID = "test_task_id"
 REGION_NAME = "eu-west-1"
 AWS_PARTITION = "aws"
-AWS_DOMAIN = "aws.amazon.com"
+AWS_CONSOLE_LINK = "https://console.aws.amazon.com"
 
 
 def _full_qualname(cls) -> str:
@@ -45,26 +45,25 @@ AWS_LINKS = [
     (
         BatchJobDefinitionLink,
         {"job_definition_arn": "arn:aws:batch:dummy-region:111111111111:job-definition/batch-test:42"},
-        f"https://console.{AWS_DOMAIN}/batch/home?region={REGION_NAME}"
+        f"{AWS_CONSOLE_LINK}/batch/home?region={REGION_NAME}"
         f"#job-definition/detail/arn:aws:batch:dummy-region:111111111111:job-definition/batch-test:42",
     ),
     (
         BatchJobDetailsLink,
         {"job_id": "00000000-0000-0000-0000-000000000000"},
-        f"https://console.{AWS_DOMAIN}/batch/home?region={REGION_NAME}"
+        f"{AWS_CONSOLE_LINK}/batch/home?region={REGION_NAME}"
         f"#jobs/detail/00000000-0000-0000-0000-000000000000",
     ),
     (
         BatchJobQueueLink,
         {"job_queue_arn": "arn:aws:batch:dummy-region:111111111111:job-queue/test-queue"},
-        f"https://console.{AWS_DOMAIN}/batch/home?region={REGION_NAME}"
+        f"{AWS_CONSOLE_LINK}/batch/home?region={REGION_NAME}"
         f"#queues/detail/arn:aws:batch:dummy-region:111111111111:job-queue/test-queue",
     ),
     (
         EmrClusterLink,
         {"job_flow_id": "j-TEST-FLOW-ID"},
-        f"https://console.{AWS_DOMAIN}/elasticmapreduce/home?region={REGION_NAME}"
-        f"#cluster-details:j-TEST-FLOW-ID",
+        f"{AWS_CONSOLE_LINK}/elasticmapreduce/home?region={REGION_NAME}#cluster-details:j-TEST-FLOW-ID",
     ),
     (
         CloudWatchEventsLink,
@@ -73,7 +72,7 @@ AWS_LINKS = [
             "awslogs_group": "/test/logs/group",
             "awslogs_stream_name": "test/stream/d56a66bb98a14c4593defa1548686edf",
         },
-        f"https://console.{AWS_DOMAIN}/cloudwatch/home?region=ap-southeast-2"
+        f"{AWS_CONSOLE_LINK}/cloudwatch/home?region=ap-southeast-2"
         f"#logsV2:log-groups/log-group/%2Ftest%2Flogs%2Fgroup"
         f"/log-events/test%2Fstream%2Fd56a66bb98a14c4593defa1548686edf",
     ),
