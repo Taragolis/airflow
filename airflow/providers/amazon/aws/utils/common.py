@@ -20,6 +20,12 @@ import re
 from typing import Optional
 
 AWS_PARTITIONS = ("aws", "aws-cn", "aws-us-gov", "aws-iso", "aws-iso-b")
+AWS_CONSOLE_DOMAINS = {
+    "aws": "aws.amazon.com",
+    "aws-cn": "amazonaws.cn",
+    "aws-us-gov": "amazonaws-us-gov.com",
+}
+DEFAULT_AWS_PARTITION = "aws"
 
 
 @functools.lru_cache(maxsize=None)

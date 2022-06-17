@@ -16,24 +16,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import functools
+from copy import deepcopy
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Optional, Type, TypeVar
 
-from airflow.models import BaseOperatorLink, XCom
-from airflow.providers.amazon.aws.utils.helpers import resolve_aws_partition
+from airflow.exceptions import AirflowException
+from airflow.models import BaseOperator, BaseOperatorLink, XCom
+from airflow.providers.amazon.aws.hooks.base_aws import AwsBaseHook
+from airflow.providers.amazon.aws.utils.common import (
+    AWS_CONSOLE_DOMAINS,
+    DEFAULT_AWS_PARTITION,
+    resolve_aws_partition,
+)
+from airflow.sensors.base import BaseSensorOperator
 
 if TYPE_CHECKING:
-    from airflow.models import BaseOperator
     from airflow.models.taskinstance import TaskInstanceKey
     from airflow.utils.context import Context
-
-
-DEFAULT_AWS_PARTITION = "aws"
-AWS_CONSOLE_DOMAINS = {
-    "aws": "aws.amazon.com",
-    "aws-cn": "amazonaws.cn",
-    "aws-us-gov": "amazonaws-us-gov.com",
-}
 
 
 class BaseAwsLink(BaseOperatorLink):
@@ -113,3 +113,122 @@ class BaseAwsLink(BaseOperatorLink):
                 **kwargs,
             },
         )
+
+
+T = TypeVar("T", bound=Callable)
+
+
+def aws_link(link_class: Type[BaseAwsLink], *, cached: bool = True):
+
+    if not issubclass(link_class, BaseAwsLink):
+        raise TypeError(
+            f"aws_link decorator only supports links subclassed from BaseAwsLink, "
+            f" got:{link_class.__module__}.{link_class.__qualname__}."
+        )
+
+    def decorated(method: Callable) -> Callable:
+        def _parse_result(
+            self,
+            *,
+            region_name: Optional[str] = None,
+            aws_partition: Optional[str] = None,
+            hook: Optional[AwsBaseHook] = None,
+            **kwargs,
+        ) -> Dict[str, Any]:
+            if not region_name:
+                try:
+                    hook = hook or getattr(self, "hook")
+                except AttributeError:
+                    raise AirflowException(
+                        f"region_name={region_name} not provided."
+                        f"You need provide them or specify 'hook' keyword argument in method:"
+                        f"{method!r} of class {self!r}."
+                    )
+                region_name = hook.conn_region_name
+
+            aws_partition = resolve_aws_partition(region_name=region_name, aws_partition=aws_partition)
+
+            kwargs = deepcopy(kwargs)
+            kwargs.pop("context", None)
+
+            return {**kwargs, "region_name": region_name, "aws_partition": aws_partition}
+
+        @functools.wraps(method)
+        def wrapped(self: BaseOperator, context: "Context", **kwargs) -> Optional[Dict[str, Any]]:
+            if cached:
+                if method._cache_aws_link:  # type: ignore
+                    return None
+                method._cache_aws_link = True  # type: ignore
+
+            if not isinstance(self, BaseOperator):
+                raise ValueError(
+                    f"'aws_link' decorator should only be applied to methods "
+                    f"of BaseOperator inheritance, got:{self}."
+                )
+            elif isinstance(self, BaseSensorOperator) and self.reschedule:
+                self.log.warning(
+                    "Sensor in mode='reschedule', in this mode XCom based Extra Link %r disabled.",
+                    BaseAwsLink.name,
+                )
+                return None
+
+            if not self.do_xcom_push:
+                self.log.warning(
+                    "'do_xcom_push' set to False - XCom based Extra Link %r disabled.", BaseAwsLink.name
+                )
+                return None
+
+            if link_class.name not in self.extra_links:
+                self.log.warning("Extra Link %r not associated with operator.", BaseAwsLink.name)
+                return None
+
+            try:
+                result = method(self, context, **kwargs) or {}
+                if result and not isinstance(result, dict):
+                    raise TypeError(f"Result of decorated method expected None or dict got {type(result)}")
+            except Exception as ex:
+                self.log.warning(
+                    "Error happen during execution %s.%s.: %s", self.__class__.__name__, method.__name__, ex
+                )
+                result = None
+
+            if result is None:
+                return None
+
+            try:
+                result = _parse_result(self, **result)
+            except Exception as ex:
+                self.log.warning(
+                    "Error happen during parse result of execution %s.%s.: %r %s",
+                    self.__class__.__name__,
+                    method.__name__,
+                    result,
+                    ex,
+                )
+                return None
+
+            try:
+                link_class.persist(context=context, operator=self, **result)
+            except Exception as ex:
+                self.log.warning(
+                    "Error happen during push to XCom by external link {}: %r %s", link_class.name, result, ex
+                )
+                return None
+
+            self.log.info("Store External Link %r data to XCom %r", link_class.name, link_class.key)
+            return result
+
+        if hasattr(method, "_decorated_aws_link"):
+            raise AirflowException(
+                f"Expected that method '{method.__name__}' decorate by 'aws_link' only once"
+                f" however found that this method already decorated."
+            )
+        else:
+            setattr(method, "_decorated_aws_link", True)
+
+        if cached:
+            setattr(method, "_cache_aws_link", False)
+
+        return wrapped
+
+    return decorated
