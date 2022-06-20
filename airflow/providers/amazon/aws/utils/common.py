@@ -30,7 +30,20 @@ DEFAULT_AWS_PARTITION = "aws"
 
 @functools.lru_cache(maxsize=None)
 def resolve_aws_partition(region_name: Optional[str] = None, aws_partition: Optional[str] = None):
-    """:placeholder:"""
+    """
+    Helper function for resolve AWS Partition (group of AWS Regions)
+
+    :param region_name: AWS region_name.
+    :param aws_partition: AWS partition.
+    :returns: AWS partition.
+
+    Either ``aws_partition`` and ``region_name`` should be provided.
+
+    If only ``aws_partition`` provided than only validate that this partition included in AWS_PARTITIONS.
+    If only ``region_name`` provided than find partition for this region.
+    If both ``aws_partition`` and ``region_name`` provided than check that region in this partition.
+
+    """
     if not aws_partition and not region_name:
         raise ValueError("Either 'aws_partition' and 'region_name' should be provided.")
 
@@ -47,7 +60,7 @@ def resolve_aws_partition(region_name: Optional[str] = None, aws_partition: Opti
         # Partitions below classified as AWS (Top) Secret and unlikely will appear.
         elif region_name.startswith("us-iso-"):
             region_aws_partition = "aws-iso"
-        elif region_name.startswith("us-iso-b-"):
+        elif region_name.startswith("us-isob-"):
             region_aws_partition = "aws-iso-b"
         else:
             raise ValueError(f"Can't find partition for region_name {region_name!r}.")
