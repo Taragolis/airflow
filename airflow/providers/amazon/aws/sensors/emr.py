@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from airflow.compat.functools import cached_property
 from airflow.exceptions import AirflowException
 from airflow.providers.amazon.aws.hooks.emr import EmrContainerHook, EmrHook
+from airflow.providers.amazon.aws.links.emr import EmrClusterLink, persist_erm_cluster_link
 from airflow.sensors.base import BaseSensorOperator
 
 
@@ -42,6 +43,11 @@ class EmrBaseSensor(BaseSensorOperator):
 
     ui_color = '#66c3ff'
 
+    @property
+    def operator_extra_links(self):
+        """Operator Extra Links. Set if Sensor has attribute ``job_flow_id``."""
+        return (EmrClusterLink(),) if hasattr(self, "job_flow_id") else ()
+
     def __init__(self, *, aws_conn_id: str = 'aws_default', **kwargs):
         super().__init__(**kwargs)
         self.aws_conn_id = aws_conn_id
@@ -58,6 +64,15 @@ class EmrBaseSensor(BaseSensorOperator):
         return self.hook
 
     def poke(self, context: 'Context'):
+        # Persis AWS EMR Cluster Link
+        if hasattr(self, "job_flow_id"):
+            persist_erm_cluster_link(
+                self,
+                context=context,
+                job_flow_id=getattr(self, "job_flow_id"),
+                region_name=self.get_hook().conn_region_name,
+            )
+
         response = self.get_emr_response()
 
         if response['ResponseMetadata']['HTTPStatusCode'] != 200:

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.batch_client import BatchClientHook
+from airflow.providers.amazon.aws.links.base_aws import aws_link
 from airflow.providers.amazon.aws.links.batch import (
     BatchJobDefinitionLink,
     BatchJobDetailsLink,
@@ -153,7 +154,14 @@ class BatchOperator(BaseOperator):
         :raises: AirflowException
         """
         self.submit_job(context)
+
+        self.persist_job_detail_link(context=context, hook=self.hook)
+        self.persist_job_definition_link(context=context, hook=self.hook)
+        self.persist_job_queue_link(context=context, hook=self.hook)
+
         self.monitor_job(context)
+
+        self.persist_cloudwatch_events_link(context=context)
 
     def on_kill(self):
         response = self.hook.client.terminate_job(jobId=self.job_id, reason="Task killed by the user")
@@ -192,13 +200,6 @@ class BatchOperator(BaseOperator):
 
         self.job_id = response["jobId"]
         self.log.info("AWS Batch job (%s) started: %s", self.job_id, response)
-        BatchJobDetailsLink.persist(
-            context=context,
-            operator=self,
-            region_name=self.hook.conn_region_name,
-            aws_partition=self.hook.conn_partition,
-            job_id=self.job_id,
-        )
 
     def monitor_job(self, context: 'Context'):
         """
@@ -212,52 +213,45 @@ class BatchOperator(BaseOperator):
         if not self.job_id:
             raise AirflowException('AWS Batch job - job_id was not found')
 
-        try:
-            job_desc = self.hook.get_job_description(self.job_id)
-            job_definition_arn = job_desc["jobDefinition"]
-            job_queue_arn = job_desc["jobQueue"]
-            self.log.info(
-                "AWS Batch job (%s) Job Definition ARN: %r, Job Queue ARN: %r",
-                self.job_id,
-                job_definition_arn,
-                job_queue_arn,
-            )
-        except KeyError:
-            self.log.warning("AWS Batch job (%s) can't get Job Definition ARN and Job Queue ARN", self.job_id)
-        else:
-            BatchJobDefinitionLink.persist(
-                context=context,
-                operator=self,
-                region_name=self.hook.conn_region_name,
-                aws_partition=self.hook.conn_partition,
-                job_definition_arn=job_definition_arn,
-            )
-            BatchJobQueueLink.persist(
-                context=context,
-                operator=self,
-                region_name=self.hook.conn_region_name,
-                aws_partition=self.hook.conn_partition,
-                job_queue_arn=job_queue_arn,
-            )
-
         if self.waiters:
             self.waiters.wait_for_job(self.job_id)
         else:
             self.hook.wait_for_job(self.job_id)
 
-        awslogs = self.hook.get_job_awslogs_info(self.job_id)
-        if awslogs:
-            self.log.info("AWS Batch job (%s) CloudWatch Events details found: %s", self.job_id, awslogs)
-            CloudWatchEventsLink.persist(
-                context=context,
-                operator=self,
-                region_name=self.hook.conn_region_name,
-                aws_partition=self.hook.conn_partition,
-                **awslogs,
-            )
-
         self.hook.check_job_success(self.job_id)
         self.log.info("AWS Batch job (%s) succeeded", self.job_id)
+
+    @aws_link(link_class=BatchJobDetailsLink)
+    def persist_job_detail_link(self, context: 'Context', **kwargs):
+        if self.job_id:
+            return {"job_id": self.job_id, **kwargs}
+
+    @aws_link(link_class=BatchJobDefinitionLink)
+    def persist_job_definition_link(self, context: 'Context', **kwargs):
+        if self.job_id:
+            return {
+                "job_definition_arn": self.hook.get_job_description(self.job_id)["jobDefinition"],
+                **kwargs,
+            }
+
+    @aws_link(link_class=BatchJobQueueLink)
+    def persist_job_queue_link(self, context: 'Context', **kwargs):
+        if self.job_id:
+            return {"job_queue_arn": self.hook.get_job_description(self.job_id)["jobQueue"], **kwargs}
+
+    @aws_link(link_class=CloudWatchEventsLink)
+    def persist_cloudwatch_events_link(self, context: 'Context', **kwargs):
+        if not self.job_id:
+            return None
+
+        awslogs = self.hook.get_job_awslogs_info(self.job_id)
+        if not awslogs:
+            return None
+
+        self.log.info("AWS Batch job (%s) CloudWatch Events details found: %s", self.job_id, awslogs)
+        region_name = awslogs.pop("awslogs_region", None)
+
+        return {**kwargs, **awslogs, "region_name": region_name}
 
 
 class AwsBatchOperator(BatchOperator):

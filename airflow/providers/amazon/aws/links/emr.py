@@ -14,8 +14,12 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+from typing import TYPE_CHECKING
 
-from airflow.providers.amazon.aws.links.base_aws import BaseAwsLink
+from airflow.providers.amazon.aws.links.base_aws import BaseAwsLink, aws_link
+
+if TYPE_CHECKING:
+    from airflow.utils.context import Context
 
 
 class EmrClusterLink(BaseAwsLink):
@@ -24,3 +28,8 @@ class EmrClusterLink(BaseAwsLink):
     name = "EMR Cluster"
     key = "emr_cluster"
     format_str = "{AWS_CONSOLE_LINK}/elasticmapreduce/home?region={region_name}#cluster-details:{job_flow_id}"
+
+
+@aws_link(link_class=EmrClusterLink)
+def persist_erm_cluster_link(self, context: 'Context', job_flow_id: str, **kwargs):
+    return {"job_flow_id": job_flow_id, **kwargs}

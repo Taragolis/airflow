@@ -118,7 +118,7 @@ class BaseAwsLink(BaseOperatorLink):
 T = TypeVar("T", bound=Callable)
 
 
-def aws_link(link_class: Type[BaseAwsLink], *, cached: bool = True):
+def aws_link(*, link_class: Type[BaseAwsLink], cached: bool = True):
 
     if not issubclass(link_class, BaseAwsLink):
         raise TypeError(
@@ -154,7 +154,7 @@ def aws_link(link_class: Type[BaseAwsLink], *, cached: bool = True):
             return {**kwargs, "region_name": region_name, "aws_partition": aws_partition}
 
         @functools.wraps(method)
-        def wrapped(self: BaseOperator, context: "Context", **kwargs) -> Optional[Dict[str, Any]]:
+        def wrapped(self: BaseOperator, *, context: "Context", **kwargs) -> Optional[Dict[str, Any]]:
             if cached:
                 if method._cache_aws_link:  # type: ignore
                     return None

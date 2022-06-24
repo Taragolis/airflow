@@ -23,7 +23,7 @@ from airflow.compat.functools import cached_property
 from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.emr import EmrContainerHook, EmrHook
-from airflow.providers.amazon.aws.links.emr import EmrClusterLink
+from airflow.providers.amazon.aws.links.emr import EmrClusterLink, persist_erm_cluster_link
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
@@ -80,7 +80,6 @@ class EmrAddStepsOperator(BaseOperator):
 
     def execute(self, context: 'Context') -> List[str]:
         emr_hook = EmrHook(aws_conn_id=self.aws_conn_id)
-
         emr = emr_hook.get_conn()
 
         job_flow_id = self.job_flow_id or emr_hook.get_cluster_id_by_name(
@@ -90,16 +89,15 @@ class EmrAddStepsOperator(BaseOperator):
         if not job_flow_id:
             raise AirflowException(f'No cluster found for name: {self.job_flow_name}')
 
+        persist_erm_cluster_link(
+            self,
+            context=context,
+            job_flow_id=job_flow_id,
+            region_name=emr_hook.conn_region_name,
+        )
+
         if self.do_xcom_push:
             context['ti'].xcom_push(key='job_flow_id', value=job_flow_id)
-
-        EmrClusterLink.persist(
-            context=context,
-            operator=self,
-            region_name=emr_hook.conn_region_name,
-            aws_partition=emr_hook.conn_partition,
-            job_flow_id=job_flow_id,
-        )
 
         self.log.info('Adding steps to %s', job_flow_id)
 
@@ -304,19 +302,19 @@ class EmrCreateJobFlowOperator(BaseOperator):
             job_flow_overrides = self.job_flow_overrides
         response = emr.create_job_flow(job_flow_overrides)
 
-        if not response['ResponseMetadata']['HTTPStatusCode'] == 200:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
             raise AirflowException(f'JobFlow creation failed: {response}')
-        else:
-            job_flow_id = response['JobFlowId']
-            self.log.info('JobFlow with id %s created', job_flow_id)
-            EmrClusterLink.persist(
-                context=context,
-                operator=self,
-                region_name=emr.conn_region_name,
-                aws_partition=emr.conn_partition,
-                job_flow_id=job_flow_id,
-            )
-            return job_flow_id
+
+        job_flow_id = response['JobFlowId']
+        persist_erm_cluster_link(
+            self,
+            context=context,
+            job_flow_id=job_flow_id,
+            region_name=emr.conn_region_name,
+        )
+
+        self.log.info('JobFlow with id %s created', job_flow_id)
+        return job_flow_id
 
 
 class EmrModifyClusterOperator(BaseOperator):
@@ -352,16 +350,15 @@ class EmrModifyClusterOperator(BaseOperator):
         emr_hook = EmrHook(aws_conn_id=self.aws_conn_id)
         emr = emr_hook.get_conn()
 
+        persist_erm_cluster_link(
+            self,
+            context=context,
+            job_flow_id=self.cluster_id,
+            region_name=emr.conn_region_name,
+        )
+
         if self.do_xcom_push:
             context['ti'].xcom_push(key='cluster_id', value=self.cluster_id)
-
-        EmrClusterLink.persist(
-            context=context,
-            operator=self,
-            region_name=emr_hook.conn_region_name,
-            aws_partition=emr_hook.conn_partition,
-            job_flow_id=self.cluster_id,
-        )
 
         self.log.info('Modifying cluster %s', self.cluster_id)
         response = emr.modify_cluster(
@@ -401,12 +398,11 @@ class EmrTerminateJobFlowOperator(BaseOperator):
         emr_hook = EmrHook(aws_conn_id=self.aws_conn_id)
         emr = emr_hook.get_conn()
 
-        EmrClusterLink.persist(
+        persist_erm_cluster_link(
+            self,
             context=context,
-            operator=self,
-            region_name=emr_hook.conn_region_name,
-            aws_partition=emr_hook.conn_partition,
             job_flow_id=self.job_flow_id,
+            region_name=emr.conn_region_name,
         )
 
         self.log.info('Terminating JobFlow %s', self.job_flow_id)
