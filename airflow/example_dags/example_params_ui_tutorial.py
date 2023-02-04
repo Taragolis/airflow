@@ -22,9 +22,10 @@ to the DAG and which are used to render a trigger form.
 """
 from __future__ import annotations
 
-import datetime
 import json
 from pathlib import Path
+
+import pendulum
 
 from airflow import DAG
 from airflow.decorators import task
@@ -33,12 +34,15 @@ from airflow.models.dagrun import DagRun
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
 
+dt = pendulum.datetime(2022, 3, 4, 12, 17, 0, tz="UTC")
+
+
 with DAG(
     dag_id=Path(__file__).stem,
     description=__doc__[0 : __doc__.find(".")],
     doc_md=__doc__,
     schedule=None,
-    start_date=datetime.datetime(2022, 3, 4),
+    start_date=pendulum.datetime(2022, 3, 4, tz="UTC"),
     catchup=False,
     tags=["example_ui"],
     params={
@@ -80,14 +84,14 @@ with DAG(
         ),
         # Dates and Times are also supported
         "date_time": Param(
-            f"{datetime.date.today()} {datetime.time(hour=12, minute=17, second=00)}",
+            f"{dt.to_iso8601_string()}",
             type="string",
             format="date-time",
             title="Date-Time Picker",
             description="Please select a date and time, use the button on the left for a pup-up calendar.",
         ),
         "date": Param(
-            f"{datetime.date.today()}",
+            f"{dt.date().isoformat()}",
             type="string",
             format="date",
             title="Date Picker",
@@ -95,7 +99,7 @@ with DAG(
             "See that here are no times!",
         ),
         "time": Param(
-            f"{datetime.time(hour=12, minute=13, second=14)}",
+            f"{dt.time().isoformat(timespec='seconds')}",
             type=["string", "null"],
             format="time",
             title="Time Picker",

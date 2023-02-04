@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import datetime
 import json
 import logging
 import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, ItemsView, Iterable, MutableMapping, ValuesView
 
+from pendulum.parsing import parse_iso8601
+
 from airflow.exceptions import AirflowException, ParamValidationError, RemovedInAirflow3Warning
+from airflow.utils import timezone
 from airflow.utils.context import Context
 from airflow.utils.mixins import ResolveMixin
 from airflow.utils.types import NOTSET, ArgNotSet
@@ -72,6 +76,26 @@ class Param:
                 RemovedInAirflow3Warning,
             )
 
+    @staticmethod
+    def _try_fix_not_rfc3339_dt(value):
+        try:
+            value = parse_iso8601(value)
+        except Exception:
+            return None
+        if not isinstance(value, datetime.datetime):
+            return None
+        warnings.warn(
+            "The use of non-RFC3339 date-time is deprecated and will be removed in a future release",
+            RemovedInAirflow3Warning,
+        )
+        if timezone.is_naive(value):
+            warnings.warn(
+                "The use naive date-time is deprecated and will be removed in a future release",
+                RemovedInAirflow3Warning,
+            )
+            value = timezone.make_aware(value)
+        return value.isoformat()
+
     def resolve(self, value: Any = NOTSET, suppress_exception: bool = False) -> Any:
         """
         Runs the validations and returns the Param's final value.
@@ -98,6 +122,11 @@ class Param:
         try:
             jsonschema.validate(final_val, self.schema, format_checker=FormatChecker())
         except ValidationError as err:
+            if err.schema.get("format") == "date-time":
+                rfc3339_value = self._try_fix_not_rfc3339_dt(final_val)
+                if rfc3339_value:
+                    self.value = rfc3339_value
+                    return rfc3339_value
             if suppress_exception:
                 return None
             raise ParamValidationError(err) from None
