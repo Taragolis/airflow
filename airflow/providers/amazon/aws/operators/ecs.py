@@ -36,6 +36,7 @@ from airflow.providers.amazon.aws.triggers.ecs import (
     TaskDoneTrigger,
 )
 from airflow.providers.amazon.aws.utils.identifiers import generate_uuid
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 from airflow.providers.amazon.aws.utils.task_log_fetcher import AwsTaskLogFetcher
 from airflow.utils.helpers import prune_dict
 
@@ -48,18 +49,10 @@ if TYPE_CHECKING:
 DEFAULT_CONN_ID = "aws_default"
 
 
-class EcsBaseOperator(BaseOperator):
+class EcsBaseOperator(Boto3Mixin[EcsHook], BaseOperator):
     """This is the base operator for all Elastic Container Service operators."""
 
-    def __init__(self, *, aws_conn_id: str | None = DEFAULT_CONN_ID, region: str | None = None, **kwargs):
-        self.aws_conn_id = aws_conn_id
-        self.region = region
-        super().__init__(**kwargs)
-
-    @cached_property
-    def hook(self) -> EcsHook:
-        """Create and return an EcsHook."""
-        return EcsHook(aws_conn_id=self.aws_conn_id, region_name=self.region)
+    aws_hook_class = EcsHook
 
     @cached_property
     def client(self) -> boto3.client:
@@ -99,6 +92,16 @@ class EcsCreateClusterOperator(EcsBaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = (
@@ -148,7 +151,7 @@ class EcsCreateClusterOperator(EcsBaseOperator):
                     waiter_delay=self.waiter_delay,
                     waiter_max_attempts=self.waiter_max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region,
+                    region_name=self.region_name,
                 ),
                 method_name="_complete_exec_with_cluster_desc",
                 # timeout is set to ensure that if a trigger dies, the timeout does not restart
@@ -187,6 +190,16 @@ class EcsDeleteClusterOperator(EcsBaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("cluster_name", "wait_for_completion", "deferrable")
@@ -225,7 +238,7 @@ class EcsDeleteClusterOperator(EcsBaseOperator):
                     waiter_delay=self.waiter_delay,
                     waiter_max_attempts=self.waiter_max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region,
+                    region_name=self.region_name,
                 ),
                 method_name="_complete_exec_with_cluster_desc",
                 # timeout is set to ensure that if a trigger dies, the timeout does not restart
@@ -257,6 +270,16 @@ class EcsDeregisterTaskDefinitionOperator(EcsBaseOperator):
 
     :param task_definition: The family and revision (family:revision) or full Amazon Resource Name (ARN)
         of the task definition to deregister. If you use a family name, you must specify a revision.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("task_definition",)
@@ -305,6 +328,16 @@ class EcsRegisterTaskDefinitionOperator(EcsBaseOperator):
     :param container_definitions: A list of container definitions in JSON format that describe
         the different containers that make up your task.
     :param register_task_kwargs: Extra arguments for Register Task Definition.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = (
@@ -372,11 +405,6 @@ class EcsRunTaskOperator(EcsBaseOperator):
     :param cluster: the cluster name on Elastic Container Service
     :param overrides: the same parameter that boto3 will receive (templated):
         https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ecs.html#ECS.Client.run_task
-    :param aws_conn_id: connection id of AWS credentials / region name. If None,
-        credential boto3 strategy will be used
-        (https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html).
-    :param region: region name to use in AWS Hook.
-        Override the region in connection (if provided)
     :param launch_type: the launch type on which to run your task ('EC2', 'EXTERNAL', or 'FARGATE')
     :param capacity_provider_strategy: the capacity provider strategy to use for the task.
         When capacity_provider_strategy is specified, the launch_type parameter is omitted.
@@ -393,9 +421,9 @@ class EcsRunTaskOperator(EcsBaseOperator):
     :param awslogs_group: the CloudWatch group where your ECS container logs are stored.
         Only required if you want logs to be shown in the Airflow UI after your job has
         finished.
-    :param awslogs_region: the region in which your CloudWatch logs are stored.
-        If None, this is the same as the `region` parameter. If that is also None,
-        this is the default AWS region based on your connection settings.
+    :param awslogs_region: the region_name in which your CloudWatch logs are stored.
+        If None, this is the same as the `region_name` parameter. If that is also None,
+        this is the default AWS region_name based on your connection settings.
     :param awslogs_stream_prefix: the stream prefix that is used for the CloudWatch logs.
         This is usually based on some custom name combined with the name of the container.
         Only required if you want logs to be shown in the Airflow UI after your job has
@@ -420,6 +448,16 @@ class EcsRunTaskOperator(EcsBaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     ui_color = "#f0ede4"
@@ -504,7 +542,7 @@ class EcsRunTaskOperator(EcsBaseOperator):
         self.number_logs_exception = number_logs_exception
 
         if self.awslogs_region is None:
-            self.awslogs_region = self.region
+            self.awslogs_region = self.region_name
 
         self.arn: str | None = None
         self._started_by: str | None = None
@@ -555,7 +593,7 @@ class EcsRunTaskOperator(EcsBaseOperator):
                     waiter_delay=self.waiter_delay,
                     waiter_max_attempts=self.waiter_max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region=self.region,
+                    region=self.region_name,
                     log_group=self.awslogs_group,
                     log_stream=self._get_logs_stream_name(),
                 ),
@@ -596,7 +634,7 @@ class EcsRunTaskOperator(EcsBaseOperator):
         self._after_execution()
         if self._aws_logs_enabled():
             # same behavior as non-deferrable mode, return last line of logs of the task.
-            logs_client = AwsLogsHook(aws_conn_id=self.aws_conn_id, region_name=self.region).conn
+            logs_client = AwsLogsHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name).conn
             one_log = logs_client.get_log_events(
                 logGroupName=self.awslogs_group,
                 logStreamName=self._get_logs_stream_name(),

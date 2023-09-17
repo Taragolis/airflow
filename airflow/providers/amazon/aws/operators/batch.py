@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import warnings
 from datetime import timedelta
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Sequence
 
 from airflow.configuration import conf
@@ -44,13 +43,14 @@ from airflow.providers.amazon.aws.triggers.batch import (
     BatchJobTrigger,
 )
 from airflow.providers.amazon.aws.utils import trim_none_values
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 from airflow.providers.amazon.aws.utils.task_log_fetcher import AwsTaskLogFetcher
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class BatchOperator(BaseOperator):
+class BatchOperator(Boto3Mixin[BatchClientHook], BaseOperator):
     """Execute a job on AWS Batch.
 
     .. seealso::
@@ -78,10 +78,6 @@ class BatchOperator(BaseOperator):
         polling is only used when waiters is None
     :param status_retries: number of HTTP retries to get job status, 10;
         polling is only used when waiters is None
-    :param aws_conn_id: connection id of AWS credentials / region name. If None,
-        credential boto3 strategy will be used.
-    :param region_name: region name to use in AWS Hook.
-        Override the region_name in connection (if provided)
     :param tags: collection of tags to apply to the AWS Batch job submission
         if None, no tags are submitted
     :param deferrable: Run operator in the deferrable mode.
@@ -90,6 +86,16 @@ class BatchOperator(BaseOperator):
         If it is an array job, only the logs of the first task will be printed.
     :param awslogs_fetch_interval: The interval with which cloudwatch logs are to be fetched, 30 sec.
     :param poll_interval: (Deferrable mode only) Time in seconds to wait between polling.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     .. note::
         Any custom waiters must return a waiter for these calls:
@@ -101,6 +107,7 @@ class BatchOperator(BaseOperator):
     """
 
     ui_color = "#c3dae0"
+    aws_hook_class = BatchClientHook
     arn: str | None = None
     template_fields: Sequence[str] = (
         "job_id",
@@ -140,7 +147,6 @@ class BatchOperator(BaseOperator):
         job_name: str,
         job_definition: str,
         job_queue: str,
-        overrides: dict | None = None,  # deprecated
         container_overrides: dict | None = None,
         array_properties: dict | None = None,
         node_overrides: dict | None = None,
@@ -152,7 +158,6 @@ class BatchOperator(BaseOperator):
         max_retries: int = 4200,
         status_retries: int | None = None,
         aws_conn_id: str | None = None,
-        region_name: str | None = None,
         tags: dict | None = None,
         wait_for_completion: bool = True,
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
@@ -161,27 +166,27 @@ class BatchOperator(BaseOperator):
         awslogs_fetch_interval: timedelta = timedelta(seconds=30),
         **kwargs,
     ) -> None:
-        BaseOperator.__init__(self, **kwargs)
+        super().__init__(aws_conn_id=aws_conn_id, **kwargs)
         self.job_id = job_id
         self.job_name = job_name
         self.job_definition = job_definition
         self.job_queue = job_queue
 
         self.container_overrides = container_overrides
-        # handle `overrides` deprecation in favor of `container_overrides`
-        if overrides:
+        if "overrides" in kwargs:
+            # handle `overrides` deprecation in favor of `container_overrides`
+            warnings.warn(
+                "Parameter `overrides` is deprecated, Please use `container_overrides` instead.",
+                AirflowProviderDeprecationWarning,
+                stacklevel=2,
+            )
             if container_overrides:
                 # disallow setting both old and new params
                 raise AirflowException(
                     "'container_overrides' replaces the 'overrides' parameter. "
                     "You cannot specify both. Please remove assignation to the deprecated 'overrides'."
                 )
-            self.container_overrides = overrides
-            warnings.warn(
-                "Parameter `overrides` is deprecated, Please use `container_overrides` instead.",
-                AirflowProviderDeprecationWarning,
-                stacklevel=2,
-            )
+            self.container_overrides = kwargs.pop("overrides")
 
         self.node_overrides = node_overrides
         self.share_identifier = share_identifier
@@ -199,17 +204,13 @@ class BatchOperator(BaseOperator):
         # params for hook
         self.max_retries = max_retries
         self.status_retries = status_retries
-        self.aws_conn_id = aws_conn_id
-        self.region_name = region_name
 
-    @cached_property
-    def hook(self) -> BatchClientHook:
-        return BatchClientHook(
-            max_retries=self.max_retries,
-            status_retries=self.status_retries,
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-        )
+    def _hook_parameters(self):
+        return {
+            **super()._hook_parameters,
+            "max_retries": self.max_retries,
+            "status_retries": self.status_retries,
+        }
 
     def execute(self, context: Context):
         """Submit and monitor an AWS Batch job.
@@ -279,7 +280,7 @@ class BatchOperator(BaseOperator):
         }
 
         try:
-            response = self.hook.client.submit_job(**trim_none_values(args))
+            response = self.hook.conn.submit_job(**trim_none_values(args))
         except Exception as e:
             self.log.error(
                 "AWS Batch job failed submission - job definition: %s - on queue %s",
@@ -385,7 +386,7 @@ class BatchOperator(BaseOperator):
         )
 
 
-class BatchCreateComputeEnvironmentOperator(BaseOperator):
+class BatchCreateComputeEnvironmentOperator(Boto3Mixin[BatchClientHook], BaseOperator):
     """Create an AWS Batch compute environment.
 
     .. seealso::
@@ -410,14 +411,21 @@ class BatchCreateComputeEnvironmentOperator(BaseOperator):
         Only useful when deferrable is True.
     :param max_retries: How many times to poll for the environment status.
         Only useful when deferrable is True.
-    :param aws_conn_id: Connection ID of AWS credentials / region name. If None,
-        credential boto3 strategy will be used.
-    :param region_name: Region name to use in AWS Hook. Overrides the
-        ``region_name`` in connection if provided.
     :param deferrable: If True, the operator will wait asynchronously for the environment to be created.
         This mode requires aiobotocore module to be installed. (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
+    aws_hook_class = BatchClientHook
     template_fields: Sequence[str] = (
         "compute_environment_name",
         "compute_resources",
@@ -437,7 +445,6 @@ class BatchCreateComputeEnvironmentOperator(BaseOperator):
         poll_interval: int = 30,
         max_retries: int | None = None,
         aws_conn_id: str | None = None,
-        region_name: str | None = None,
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
@@ -450,8 +457,7 @@ class BatchCreateComputeEnvironmentOperator(BaseOperator):
             )
             kwargs.pop("status_retries")  # remove before calling super() to prevent unexpected arg error
 
-        super().__init__(**kwargs)
-
+        super().__init__(aws_conn_id=aws_conn_id, **kwargs)
         self.compute_environment_name = compute_environment_name
         self.environment_type = environment_type
         self.state = state
@@ -461,17 +467,7 @@ class BatchCreateComputeEnvironmentOperator(BaseOperator):
         self.tags = tags or {}
         self.poll_interval = poll_interval
         self.max_retries = max_retries or 120
-        self.aws_conn_id = aws_conn_id
-        self.region_name = region_name
         self.deferrable = deferrable
-
-    @cached_property
-    def hook(self):
-        """Create and return a BatchClientHook."""
-        return BatchClientHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-        )
 
     def execute(self, context: Context):
         """Create an AWS batch compute environment."""
@@ -484,7 +480,7 @@ class BatchCreateComputeEnvironmentOperator(BaseOperator):
             "serviceRole": self.service_role,
             "tags": self.tags,
         }
-        response = self.hook.client.create_compute_environment(**trim_none_values(kwargs))
+        response = self.hook.conn.create_compute_environment(**trim_none_values(kwargs))
         arn = response["computeEnvironmentArn"]
 
         if self.deferrable:

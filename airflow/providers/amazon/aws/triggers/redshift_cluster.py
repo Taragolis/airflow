@@ -45,7 +45,7 @@ class RedshiftCreateClusterTrigger(AwsBaseWaiterTrigger):
         cluster_identifier: str,
         poll_interval: int | None = None,
         max_attempt: int | None = None,
-        aws_conn_id: str = "aws_default",
+        aws_conn_id: str | None = "aws_default",
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
     ):
@@ -93,7 +93,7 @@ class RedshiftPauseClusterTrigger(AwsBaseWaiterTrigger):
         cluster_identifier: str,
         poll_interval: int | None = None,
         max_attempts: int | None = None,
-        aws_conn_id: str = "aws_default",
+        aws_conn_id: str | None = "aws_default",
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
     ):
@@ -141,7 +141,7 @@ class RedshiftCreateClusterSnapshotTrigger(AwsBaseWaiterTrigger):
         cluster_identifier: str,
         poll_interval: int | None = None,
         max_attempts: int | None = None,
-        aws_conn_id: str = "aws_default",
+        aws_conn_id: str | None = "aws_default",
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
     ):
@@ -189,7 +189,7 @@ class RedshiftResumeClusterTrigger(AwsBaseWaiterTrigger):
         cluster_identifier: str,
         poll_interval: int | None = None,
         max_attempts: int | None = None,
-        aws_conn_id: str = "aws_default",
+        aws_conn_id: str | None = "aws_default",
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
     ):
@@ -234,7 +234,7 @@ class RedshiftDeleteClusterTrigger(AwsBaseWaiterTrigger):
         cluster_identifier: str,
         poll_interval: int | None = None,
         max_attempts: int | None = None,
-        aws_conn_id: str = "aws_default",
+        aws_conn_id: str | None = "aws_default",
         waiter_delay: int = 30,
         waiter_max_attempts: int = 30,
     ):

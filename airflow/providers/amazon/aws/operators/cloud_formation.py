@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, Sequence
 
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.cloud_formation import CloudFormationHook
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class CloudFormationCreateStackOperator(BaseOperator):
+class CloudFormationCreateStackOperator(Boto3Mixin[CloudFormationHook], BaseOperator):
     """
     An operator that creates a CloudFormation stack.
 
@@ -37,9 +38,19 @@ class CloudFormationCreateStackOperator(BaseOperator):
 
     :param stack_name: stack name (templated)
     :param cloudformation_parameters: parameters to be passed to CloudFormation.
-    :param aws_conn_id: aws connection to uses
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
+    aws_hook_class = CloudFormationHook
     template_fields: Sequence[str] = ("stack_name", "cloudformation_parameters")
     template_ext: Sequence[str] = ()
     ui_color = "#6b9659"
@@ -50,29 +61,35 @@ class CloudFormationCreateStackOperator(BaseOperator):
         super().__init__(**kwargs)
         self.stack_name = stack_name
         self.cloudformation_parameters = cloudformation_parameters
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
         self.log.info("CloudFormation parameters: %s", self.cloudformation_parameters)
-
-        cloudformation_hook = CloudFormationHook(aws_conn_id=self.aws_conn_id)
-        cloudformation_hook.create_stack(self.stack_name, self.cloudformation_parameters)
+        self.hook.create_stack(self.stack_name, self.cloudformation_parameters)
 
 
-class CloudFormationDeleteStackOperator(BaseOperator):
+class CloudFormationDeleteStackOperator(Boto3Mixin[CloudFormationHook], BaseOperator):
     """
     An operator that deletes a CloudFormation stack.
-
-    :param stack_name: stack name (templated)
-    :param cloudformation_parameters: parameters to be passed to CloudFormation.
 
     .. seealso::
         For more information on how to use this operator, take a look at the guide:
         :ref:`howto/operator:CloudFormationDeleteStackOperator`
 
-    :param aws_conn_id: aws connection to uses
+    :param stack_name: stack name (templated)
+    :param cloudformation_parameters: parameters to be passed to CloudFormation.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
+    aws_hook_class = CloudFormationHook
     template_fields: Sequence[str] = ("stack_name",)
     template_ext: Sequence[str] = ()
     ui_color = "#1d472b"
@@ -83,16 +100,12 @@ class CloudFormationDeleteStackOperator(BaseOperator):
         *,
         stack_name: str,
         cloudformation_parameters: dict | None = None,
-        aws_conn_id: str = "aws_default",
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.cloudformation_parameters = cloudformation_parameters or {}
         self.stack_name = stack_name
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
         self.log.info("CloudFormation Parameters: %s", self.cloudformation_parameters)
-
-        cloudformation_hook = CloudFormationHook(aws_conn_id=self.aws_conn_id)
-        cloudformation_hook.delete_stack(self.stack_name, self.cloudformation_parameters)
+        self.hook.delete_stack(self.stack_name, self.cloudformation_parameters)

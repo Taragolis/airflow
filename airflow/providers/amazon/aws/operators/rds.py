@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import warnings
 from datetime import timedelta
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Sequence
 
 from airflow.configuration import conf
@@ -32,17 +31,34 @@ from airflow.providers.amazon.aws.triggers.rds import (
     RdsDbDeletedTrigger,
     RdsDbStoppedTrigger,
 )
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 from airflow.providers.amazon.aws.utils.rds import RdsDbType
 from airflow.providers.amazon.aws.utils.tags import format_tags
 from airflow.providers.amazon.aws.utils.waiter_with_logging import wait
 
 if TYPE_CHECKING:
+    from botocore.config import Config
     from mypy_boto3_rds.type_defs import TagTypeDef
 
     from airflow.utils.context import Context
 
 
-class RdsBaseOperator(BaseOperator):
+__all__ = [
+    "RdsCreateDbSnapshotOperator",
+    "RdsCopyDbSnapshotOperator",
+    "RdsDeleteDbSnapshotOperator",
+    "RdsCreateEventSubscriptionOperator",
+    "RdsDeleteEventSubscriptionOperator",
+    "RdsStartExportTaskOperator",
+    "RdsCancelExportTaskOperator",
+    "RdsCreateDbInstanceOperator",
+    "RdsDeleteDbInstanceOperator",
+    "RdsStartDbOperator",
+    "RdsStopDbOperator",
+]
+
+
+class RdsBaseOperator(Boto3Mixin[RdsHook], BaseOperator):
     """Base operator that implements common functions for all operators."""
 
     ui_color = "#eeaa88"
@@ -50,9 +66,10 @@ class RdsBaseOperator(BaseOperator):
 
     def __init__(
         self,
-        *args,
-        aws_conn_id: str = "aws_conn_id",
+        aws_conn_id: str | None = "aws_default",
         region_name: str | None = None,
+        verify: bool | str | None = None,
+        botocore_config: Config | None = None,
         hook_params: dict | None = None,
         **kwargs,
     ):
@@ -67,16 +84,19 @@ class RdsBaseOperator(BaseOperator):
                 AirflowProviderDeprecationWarning,
                 stacklevel=3,  # 2 is in the operator's init, 3 is in the user code creating the operator
             )
+            region_name = region_name or hook_params.pop("region_name", None)
+            verify = verify or hook_params.pop("verify", None)
+            botocore_config = region_name or hook_params.pop("config", None)
+
+        super().__init__(
+            aws_conn_id=aws_conn_id,
+            region_name=region_name,
+            verify=verify,
+            botocore_config=botocore_config,
+            **kwargs,
+        )
         self.hook_params = hook_params or {}
-        self.aws_conn_id = aws_conn_id
-        self.region_name = region_name or self.hook_params.pop("region_name", None)
-        super().__init__(*args, **kwargs)
-
         self._await_interval = 60  # seconds
-
-    @cached_property
-    def hook(self) -> RdsHook:
-        return RdsHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name, **self.hook_params)
 
     def execute(self, context: Context) -> str:
         """Different implementations for snapshots, tasks and events."""
@@ -103,6 +123,16 @@ class RdsCreateDbSnapshotOperator(RdsBaseOperator):
     :param tags: A dictionary of tags or a list of tags in format `[{"Key": "...", "Value": "..."},]`
         `USER Tagging <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Tagging.html>`__
     :param wait_for_completion:  If True, waits for creation of the DB snapshot to complete. (default: True)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_snapshot_identifier", "db_identifier", "tags")
@@ -176,8 +206,18 @@ class RdsCopyDbSnapshotOperator(RdsBaseOperator):
         Only when db_type='instance'
     :param target_custom_availability_zone: The external custom Availability Zone identifier for the target
         Only when db_type='instance'
-    :param source_region: The ID of the region that contains the snapshot to be copied
+    :param source_region: The ID of the region_name that contains the snapshot to be copied
     :param wait_for_completion:  If True, waits for snapshot copy to complete. (default: True)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = (
@@ -271,6 +311,16 @@ class RdsDeleteDbSnapshotOperator(RdsBaseOperator):
 
     :param db_type: Type of the DB - either "instance" or "cluster"
     :param db_snapshot_identifier: The identifier for the DB instance or DB cluster snapshot
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_snapshot_identifier",)
@@ -330,6 +380,16 @@ class RdsStartExportTaskOperator(RdsBaseOperator):
     :param wait_for_completion:  If True, waits for the DB snapshot export to complete. (default: True)
     :param waiter_interval: The number of seconds to wait before checking the export status. (default: 30)
     :param waiter_max_attempts: The number of attempts to make before failing. (default: 40)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = (
@@ -405,6 +465,16 @@ class RdsCancelExportTaskOperator(RdsBaseOperator):
     :param wait_for_completion:  If True, waits for DB snapshot export to cancel. (default: True)
     :param check_interval: The amount of time in seconds to wait between attempts
     :param max_attempts: The maximum number of attempts to be made
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("export_task_identifier",)
@@ -461,6 +531,16 @@ class RdsCreateEventSubscriptionOperator(RdsBaseOperator):
     :param tags: A dictionary of tags or a list of tags in format `[{"Key": "...", "Value": "..."},]`
         `USER Tagging <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Tagging.html>`__
     :param wait_for_completion:  If True, waits for creation of the subscription to complete. (default: True)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = (
@@ -524,6 +604,16 @@ class RdsDeleteEventSubscriptionOperator(RdsBaseOperator):
         :ref:`howto/operator:RdsDeleteEventSubscriptionOperator`
 
     :param subscription_name: The name of the RDS event notification subscription you want to delete
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("subscription_name",)
@@ -571,6 +661,16 @@ class RdsCreateDbInstanceOperator(RdsBaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the DB instance to be created.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_instance_identifier", "db_instance_class", "engine", "rds_kwargs")
@@ -661,6 +761,16 @@ class RdsDeleteDbInstanceOperator(RdsBaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the DB instance to be created.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_instance_identifier", "rds_kwargs")
@@ -742,6 +852,16 @@ class RdsStartDbOperator(RdsBaseOperator):
     :param waiter_max_attempts: The maximum number of attempts to check DB instance state
     :param deferrable: If True, the operator will wait asynchronously for the DB instance to be created.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_identifier", "db_type")
@@ -837,6 +957,16 @@ class RdsStopDbOperator(RdsBaseOperator):
     :param waiter_max_attempts: The maximum number of attempts to check DB instance state
     :param deferrable: If True, the operator will wait asynchronously for the DB instance to be created.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields = ("db_identifier", "db_snapshot_identifier", "db_type")
@@ -922,18 +1052,3 @@ class RdsStopDbOperator(RdsBaseOperator):
                 check_interval=self.waiter_delay,
                 max_attempts=self.waiter_max_attempts,
             )
-
-
-__all__ = [
-    "RdsCreateDbSnapshotOperator",
-    "RdsCopyDbSnapshotOperator",
-    "RdsDeleteDbSnapshotOperator",
-    "RdsCreateEventSubscriptionOperator",
-    "RdsDeleteEventSubscriptionOperator",
-    "RdsStartExportTaskOperator",
-    "RdsCancelExportTaskOperator",
-    "RdsCreateDbInstanceOperator",
-    "RdsDeleteDbInstanceOperator",
-    "RdsStartDbOperator",
-    "RdsStopDbOperator",
-]

@@ -25,12 +25,19 @@ from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.step_function import StepFunctionHook
 from airflow.providers.amazon.aws.triggers.step_function import StepFunctionsExecutionCompleteTrigger
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class StepFunctionStartExecutionOperator(BaseOperator):
+class _BaseStepFunctionsOperator(Boto3Mixin[StepFunctionHook], BaseOperator):
+    """Base AWS Step Functions Operator."""
+
+    aws_hook_class = StepFunctionHook
+
+
+class StepFunctionStartExecutionOperator(_BaseStepFunctionsOperator):
     """
     An Operator that begins execution of an AWS Step Function State Machine.
 
@@ -43,13 +50,22 @@ class StepFunctionStartExecutionOperator(BaseOperator):
     :param state_machine_arn: ARN of the Step Function State Machine
     :param name: The name of the execution.
     :param state_machine_input: JSON data input to pass to the State Machine
-    :param aws_conn_id: aws connection to uses
     :param do_xcom_push: if True, execution_arn is pushed to XCom with key execution_arn.
     :param waiter_max_attempts: Maximum number of attempts to poll the execution.
     :param waiter_delay: Number of seconds between polling the state of the execution.
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
         This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False, but can be overridden in config file by setting default_deferrable to True)
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("state_machine_arn", "name", "input")
@@ -62,8 +78,6 @@ class StepFunctionStartExecutionOperator(BaseOperator):
         state_machine_arn: str,
         name: str | None = None,
         state_machine_input: dict | str | None = None,
-        aws_conn_id: str = "aws_default",
-        region_name: str | None = None,
         waiter_max_attempts: int = 30,
         waiter_delay: int = 60,
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
@@ -73,17 +87,12 @@ class StepFunctionStartExecutionOperator(BaseOperator):
         self.state_machine_arn = state_machine_arn
         self.name = name
         self.input = state_machine_input
-        self.aws_conn_id = aws_conn_id
-        self.region_name = region_name
         self.waiter_delay = waiter_delay
         self.waiter_max_attempts = waiter_max_attempts
         self.deferrable = deferrable
 
     def execute(self, context: Context):
-        hook = StepFunctionHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)
-
-        execution_arn = hook.start_execution(self.state_machine_arn, self.name, self.input)
-
+        execution_arn = self.hook.start_execution(self.state_machine_arn, self.name, self.input)
         if execution_arn is None:
             raise AirflowException(f"Failed to start State Machine execution for: {self.state_machine_arn}")
 
@@ -110,7 +119,7 @@ class StepFunctionStartExecutionOperator(BaseOperator):
         return event["execution_arn"]
 
 
-class StepFunctionGetExecutionOutputOperator(BaseOperator):
+class StepFunctionGetExecutionOutputOperator(_BaseStepFunctionsOperator):
     """
     An Operator that returns the output of an AWS Step Function State Machine execution.
 
@@ -121,30 +130,28 @@ class StepFunctionGetExecutionOutputOperator(BaseOperator):
         :ref:`howto/operator:StepFunctionGetExecutionOutputOperator`
 
     :param execution_arn: ARN of the Step Function State Machine Execution
-    :param aws_conn_id: aws connection to use, defaults to 'aws_default'
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("execution_arn",)
     template_ext: Sequence[str] = ()
     ui_color = "#f9c915"
 
-    def __init__(
-        self,
-        *,
-        execution_arn: str,
-        aws_conn_id: str = "aws_default",
-        region_name: str | None = None,
-        **kwargs,
-    ):
+    def __init__(self, *, execution_arn: str, **kwargs):
         super().__init__(**kwargs)
         self.execution_arn = execution_arn
-        self.aws_conn_id = aws_conn_id
-        self.region_name = region_name
 
     def execute(self, context: Context):
-        hook = StepFunctionHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)
-
-        execution_status = hook.describe_execution(self.execution_arn)
+        execution_status = self.hook.describe_execution(self.execution_arn)
         response = None
         if "output" in execution_status:
             response = json.loads(execution_status["output"])

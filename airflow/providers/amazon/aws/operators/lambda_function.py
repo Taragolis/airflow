@@ -19,20 +19,26 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Sequence
 
-from airflow import AirflowException
 from airflow.configuration import conf
+from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.lambda_function import LambdaHook
 from airflow.providers.amazon.aws.triggers.lambda_function import LambdaCreateFunctionCompleteTrigger
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class LambdaCreateFunctionOperator(BaseOperator):
+class _BaseGlacierOperator(Boto3Mixin[LambdaHook], BaseOperator):
+    """Base AWS Lambda Operator."""
+
+    aws_hook_class = LambdaHook
+
+
+class LambdaCreateFunctionOperator(_BaseGlacierOperator):
     """
     Creates an AWS Lambda function.
 
@@ -59,7 +65,16 @@ class LambdaCreateFunctionOperator(BaseOperator):
     :param deferrable: If True, the operator will wait asynchronously for the creation to complete.
         This implies waiting for creation complete. This mode requires aiobotocore module to be installed.
         (default: False, but can be overridden in config file by setting default_deferrable to True)
-    :param aws_conn_id: The AWS connection ID to use
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = (
@@ -82,12 +97,11 @@ class LambdaCreateFunctionOperator(BaseOperator):
         code: dict,
         description: str | None = None,
         timeout: int | None = None,
-        config: dict = {},
+        config: dict | None = None,
         wait_for_completion: bool = False,
         waiter_max_attempts: int = 60,
         waiter_delay: int = 15,
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
-        aws_conn_id: str = "aws_default",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -98,16 +112,11 @@ class LambdaCreateFunctionOperator(BaseOperator):
         self.code = code
         self.description = description
         self.timeout = timeout
-        self.config = config
+        self.config = config or {}
         self.wait_for_completion = wait_for_completion
         self.waiter_delay = waiter_delay
         self.waiter_max_attempts = waiter_max_attempts
         self.deferrable = deferrable
-        self.aws_conn_id = aws_conn_id
-
-    @cached_property
-    def hook(self) -> LambdaHook:
-        return LambdaHook(aws_conn_id=self.aws_conn_id)
 
     def execute(self, context: Context):
         self.log.info("Creating AWS Lambda function: %s", self.function_name)
@@ -152,7 +161,7 @@ class LambdaCreateFunctionOperator(BaseOperator):
         return event["function_arn"]
 
 
-class LambdaInvokeFunctionOperator(BaseOperator):
+class LambdaInvokeFunctionOperator(_BaseGlacierOperator):
     """
     Invokes an AWS Lambda function.
 
@@ -170,7 +179,16 @@ class LambdaInvokeFunctionOperator(BaseOperator):
     :param invocation_type: AWS Lambda invocation type (RequestResponse, Event, DryRun)
     :param client_context: Data about the invoking client to pass to the function in the context object
     :param payload: JSON provided as input to the Lambda function
-    :param aws_conn_id: The AWS connection ID to use
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("function_name", "payload", "qualifier", "invocation_type")
@@ -185,7 +203,6 @@ class LambdaInvokeFunctionOperator(BaseOperator):
         invocation_type: str | None = None,
         client_context: str | None = None,
         payload: bytes | str | None = None,
-        aws_conn_id: str = "aws_default",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -195,11 +212,6 @@ class LambdaInvokeFunctionOperator(BaseOperator):
         self.qualifier = qualifier
         self.invocation_type = invocation_type
         self.client_context = client_context
-        self.aws_conn_id = aws_conn_id
-
-    @cached_property
-    def hook(self) -> LambdaHook:
-        return LambdaHook(aws_conn_id=self.aws_conn_id)
 
     def execute(self, context: Context):
         """

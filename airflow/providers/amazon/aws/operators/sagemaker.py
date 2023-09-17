@@ -20,7 +20,6 @@ import datetime
 import json
 import time
 import warnings
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from botocore.exceptions import ClientError
@@ -35,6 +34,7 @@ from airflow.providers.amazon.aws.triggers.sagemaker import (
     SageMakerTrigger,
 )
 from airflow.providers.amazon.aws.utils import trim_none_values
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 from airflow.providers.amazon.aws.utils.sagemaker import ApprovalStatus
 from airflow.providers.amazon.aws.utils.tags import format_tags
 from airflow.utils.helpers import prune_dict
@@ -54,8 +54,14 @@ def serialize(result: dict) -> dict:
     return json.loads(json.dumps(result, cls=AirflowJsonEncoder))
 
 
-class SageMakerBaseOperator(BaseOperator):
-    """This is the base operator for all SageMaker operators.
+class _BaseSageMakerOperator(Boto3Mixin[SageMakerHook], BaseOperator):
+    """Base AWS SageMaker Operator."""
+
+    aws_hook_class = SageMakerHook
+
+
+class SageMakerBaseOperator(_BaseSageMakerOperator):
+    """This is the base operator for most of SageMaker operators.
 
     :param config: The configuration necessary to start a training job (templated)
     """
@@ -66,10 +72,9 @@ class SageMakerBaseOperator(BaseOperator):
     ui_color: str = "#ededed"
     integer_fields: list[list[Any]] = []
 
-    def __init__(self, *, config: dict, aws_conn_id: str = DEFAULT_CONN_ID, **kwargs):
+    def __init__(self, *, config: dict, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-        self.aws_conn_id = aws_conn_id
 
     def parse_integer(self, config: dict, field: list[str] | str) -> None:
         """Recursive method for parsing string fields holding integer values to integers."""
@@ -89,7 +94,6 @@ class SageMakerBaseOperator(BaseOperator):
         (head, tail) = (field[0], field[1:])
         if head in config:
             self.parse_integer(config[head], tail)
-        return
 
     def parse_config_integers(self) -> None:
         """Parse the integer fields to ints in case the config is rendered by Jinja and all fields are str."""
@@ -157,11 +161,6 @@ class SageMakerBaseOperator(BaseOperator):
     def execute(self, context: Context):
         raise NotImplementedError("Please implement execute() in sub class!")
 
-    @cached_property
-    def hook(self):
-        """Return SageMakerHook."""
-        return SageMakerHook(aws_conn_id=self.aws_conn_id)
-
     @staticmethod
     def path_to_s3_dataset(path) -> Dataset:
         from openlineage.client.run import Dataset
@@ -185,7 +184,6 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
 
     :param config: The configuration necessary to start a processing job (templated).
         For details of the configuration parameter see :py:meth:`SageMaker.Client.create_processing_job`
-    :param aws_conn_id: The AWS connection ID to use.
     :param wait_for_completion: If wait is set to True, the time interval, in seconds,
         that the operation waits to check the status of the processing job.
     :param print_log: if the operator should print the cloudwatch log during processing
@@ -200,14 +198,23 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         (default), "increment" (deprecated) and "fail".
     :param deferrable: Run operator in the deferrable mode. This is only effective if wait_for_completion is
         set to True.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the processing job created in Amazon SageMaker.
     """
 
     def __init__(
         self,
         *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         wait_for_completion: bool = True,
         print_log: bool = True,
         check_interval: int = CHECK_INTERVAL_SECOND,
@@ -217,7 +224,7 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(**kwargs)
         if action_if_job_exists not in ("increment", "fail", "timestamp"):
             raise AirflowException(
                 f"Argument action_if_job_exists accepts only 'timestamp', 'increment' and 'fail'. \
@@ -351,20 +358,23 @@ class SageMakerEndpointConfigOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerEndpointConfigOperator`
 
     :param config: The configuration necessary to create an endpoint config.
-
         For details of the configuration parameter see :py:meth:`SageMaker.Client.create_endpoint_config`
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the endpoint config created in Amazon SageMaker.
     """
 
-    def __init__(
-        self,
-        *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
-        **kwargs,
-    ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def _create_integer_fields(self) -> None:
         """Set fields which should be cast to integers."""
@@ -429,16 +439,24 @@ class SageMakerEndpointOperator(SageMakerBaseOperator):
     :param max_ingestion_time: If wait is set to True, this operation fails if the endpoint creation doesn't
         finish within max_ingestion_time seconds. If you set this parameter to None it never times out.
     :param operation: Whether to create an endpoint or update an endpoint. Must be either 'create or 'update'.
-    :param aws_conn_id: The AWS connection ID to use.
     :param deferrable:  Will wait asynchronously for completion.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the endpoint created in Amazon SageMaker.
     """
 
     def __init__(
         self,
         *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         wait_for_completion: bool = True,
         check_interval: int = CHECK_INTERVAL_SECOND,
         max_ingestion_time: int | None = None,
@@ -446,7 +464,7 @@ class SageMakerEndpointOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(**kwargs)
         self.wait_for_completion = wait_for_completion
         self.check_interval = check_interval
         self.max_ingestion_time = max_ingestion_time or 3600 * 10
@@ -590,7 +608,6 @@ class SageMakerTransformOperator(SageMakerBaseOperator):
         For details of the configuration parameter of model_config, See:
         :py:meth:`SageMaker.Client.create_model`
 
-    :param aws_conn_id: The AWS connection ID to use.
     :param wait_for_completion: Set to True to wait until the transform job finishes.
     :param check_interval: If wait is set to True, the time interval, in seconds,
         that this operation waits to check the status of the transform job.
@@ -604,14 +621,23 @@ class SageMakerTransformOperator(SageMakerBaseOperator):
     :param action_if_job_exists: Behaviour if the job name already exists. Possible options are "timestamp"
         (default), "increment" (deprecated) and "fail".
         This is only relevant if check_if_job_exists is True.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the model created in Amazon SageMaker.
     """
 
     def __init__(
         self,
         *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         wait_for_completion: bool = True,
         check_interval: int = CHECK_INTERVAL_SECOND,
         max_attempts: int | None = None,
@@ -621,7 +647,7 @@ class SageMakerTransformOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(**kwargs)
         self.wait_for_completion = wait_for_completion
         self.check_interval = check_interval
         self.max_attempts = max_attempts or 60
@@ -800,10 +826,8 @@ class SageMakerTuningOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerTuningOperator`
 
     :param config: The configuration necessary to start a tuning job (templated).
-
         For details of the configuration parameter see
         :py:meth:`SageMaker.Client.create_hyper_parameter_tuning_job`
-    :param aws_conn_id: The AWS connection ID to use.
     :param wait_for_completion: Set to True to wait until the tuning job finishes.
     :param check_interval: If wait is set to True, the time interval, in seconds,
         that this operation waits to check the status of the tuning job.
@@ -811,21 +835,30 @@ class SageMakerTuningOperator(SageMakerBaseOperator):
         if the tuning job doesn't finish within max_ingestion_time seconds. If you
         set this parameter to None, the operation does not timeout.
     :param deferrable: Will wait asynchronously for completion.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the tuning job created in Amazon SageMaker.
     """
 
     def __init__(
         self,
         *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         wait_for_completion: bool = True,
         check_interval: int = CHECK_INTERVAL_SECOND,
         max_ingestion_time: int | None = None,
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(**kwargs)
         self.wait_for_completion = wait_for_completion
         self.check_interval = check_interval
         self.max_ingestion_time = max_ingestion_time
@@ -912,14 +945,23 @@ class SageMakerModelOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerModelOperator`
 
     :param config: The configuration necessary to create a model.
-
         For details of the configuration parameter see :py:meth:`SageMaker.Client.create_model`
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the model created in Amazon SageMaker.
     """
 
-    def __init__(self, *, config: dict, aws_conn_id: str = DEFAULT_CONN_ID, **kwargs):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def expand_role(self) -> None:
         """Expand an IAM role name into an ARN."""
@@ -949,7 +991,6 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerTrainingOperator`
 
     :param config: The configuration necessary to start a training job (templated).
-
         For details of the configuration parameter see :py:meth:`SageMaker.Client.create_training_job`
     :param aws_conn_id: The AWS connection ID to use.
     :param wait_for_completion: If wait is set to True, the time interval, in seconds,
@@ -969,14 +1010,23 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         This is only relevant if check_if_job_exists is True.
     :param deferrable: Run operator in the deferrable mode. This is only effective if wait_for_completion is
         set to True.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
+
     :return Dict: Returns The ARN of the training job created in Amazon SageMaker.
     """
 
     def __init__(
         self,
         *,
-        config: dict,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         wait_for_completion: bool = True,
         print_log: bool = True,
         check_interval: int = CHECK_INTERVAL_SECOND,
@@ -987,7 +1037,7 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(**kwargs)
         self.wait_for_completion = wait_for_completion
         self.print_log = print_log
         self.check_interval = check_interval
@@ -1116,15 +1166,23 @@ class SageMakerDeleteModelOperator(SageMakerBaseOperator):
 
     :param config: The configuration necessary to delete the model.
         For details of the configuration parameter see :py:meth:`SageMaker.Client.delete_model`
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
-    def __init__(self, *, config: dict, aws_conn_id: str = DEFAULT_CONN_ID, **kwargs):
-        super().__init__(config=config, aws_conn_id=aws_conn_id, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def execute(self, context: Context) -> Any:
-        sagemaker_hook = SageMakerHook(aws_conn_id=self.aws_conn_id)
-        sagemaker_hook.delete_model(model_name=self.config["ModelName"])
+        self.hook.delete_model(model_name=self.config["ModelName"])
         self.log.info("Model %s deleted successfully.", self.config["ModelName"])
 
 
@@ -1137,7 +1195,6 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerStartPipelineOperator`
 
     :param config: The configuration to start the pipeline execution.
-    :param aws_conn_id: The AWS connection ID to use.
     :param pipeline_name: Name of the pipeline to start.
     :param display_name: The name this pipeline execution will have in the UI. Doesn't need to be unique.
     :param pipeline_params: Optional parameters for the pipeline.
@@ -1148,6 +1205,16 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
     :param verbose: Whether to print steps details when waiting for completion.
         Defaults to true, consider turning off for pipelines that have thousands of steps.
     :param deferrable: Run operator in the deferrable mode.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :return str: Returns The ARN of the pipeline execution created in Amazon SageMaker.
     """
@@ -1157,7 +1224,6 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
     def __init__(
         self,
         *,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         pipeline_name: str,
         display_name: str = "airflow-triggered-execution",
         pipeline_params: dict | None = None,
@@ -1168,7 +1234,8 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config={}, aws_conn_id=aws_conn_id, **kwargs)
+        kwargs["config"] = {}
+        super().__init__(**kwargs)
         self.pipeline_name = pipeline_name
         self.display_name = display_name
         self.pipeline_params = pipeline_params
@@ -1224,7 +1291,6 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
         :ref:`howto/operator:SageMakerStopPipelineOperator`
 
     :param config: The configuration to start the pipeline execution.
-    :param aws_conn_id: The AWS connection ID to use.
     :param pipeline_exec_arn: Amazon Resource Name of the pipeline execution to stop.
     :param wait_for_completion: If true, this operator will only complete once the pipeline is fully stopped.
     :param check_interval: How long to wait between checks for pipeline status when waiting for completion.
@@ -1232,6 +1298,16 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
         Defaults to true, consider turning off for pipelines that have thousands of steps.
     :param fail_if_not_running: raises an exception if the pipeline stopped or succeeded before this was run
     :param deferrable: Run operator in the deferrable mode.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :return str: Returns the status of the pipeline execution after the operation has been done.
     """
@@ -1244,7 +1320,6 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
     def __init__(
         self,
         *,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         pipeline_exec_arn: str,
         wait_for_completion: bool = False,
         check_interval: int = CHECK_INTERVAL_SECOND,
@@ -1254,7 +1329,8 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ):
-        super().__init__(config={}, aws_conn_id=aws_conn_id, **kwargs)
+        kwargs["config"] = {}
+        super().__init__(**kwargs)
         self.pipeline_exec_arn = pipeline_exec_arn
         self.wait_for_completion = wait_for_completion
         self.check_interval = check_interval
@@ -1333,6 +1409,16 @@ class SageMakerRegisterModelVersionOperator(SageMakerBaseOperator):
     :param extras: Can contain extra parameters for the boto call to create_model_package, and/or overrides
         for any parameter defined above. For a complete list of available parameters, see
         https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sagemaker.html#SageMaker.Client.create_model_package
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :return str: Returns the ARN of the model package created.
     """
@@ -1356,11 +1442,10 @@ class SageMakerRegisterModelVersionOperator(SageMakerBaseOperator):
         package_desc: str = "",
         model_approval: ApprovalStatus = ApprovalStatus.PENDING_MANUAL_APPROVAL,
         extras: dict | None = None,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         config: dict | None = None,
         **kwargs,
     ):
-        super().__init__(config=config or {}, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(config=config or {}, **kwargs)
         self.image_uri = image_uri
         self.model_url = model_url
         self.package_group_name = package_group_name
@@ -1427,6 +1512,16 @@ class SageMakerAutoMLOperator(SageMakerBaseOperator):
         https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sagemaker.html#SageMaker.Client.create_auto_ml_job
     :param wait_for_completion: Whether to wait for the job to finish before returning. Defaults to True.
     :param check_interval: Interval in seconds between 2 status checks when waiting for completion.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :returns: Only if waiting for completion, a dictionary detailing the best model. The structure is that of
         the "BestCandidate" key in:
@@ -1459,11 +1554,10 @@ class SageMakerAutoMLOperator(SageMakerBaseOperator):
         extras: dict | None = None,
         wait_for_completion: bool = True,
         check_interval: int = 30,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         config: dict | None = None,
         **kwargs,
     ):
-        super().__init__(config=config or {}, aws_conn_id=aws_conn_id, **kwargs)
+        super().__init__(config=config or {}, **kwargs)
         self.job_name = job_name
         self.s3_input = s3_input
         self.target_attribute = target_attribute
@@ -1504,7 +1598,16 @@ class SageMakerCreateExperimentOperator(SageMakerBaseOperator):
     :param name: name of the experiment, must be unique within the AWS account
     :param description: description of the experiment, optional
     :param tags: tags to attach to the experiment, optional
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :returns: the ARN of the experiment created, though experiments are referred to by name
     """
@@ -1521,10 +1624,10 @@ class SageMakerCreateExperimentOperator(SageMakerBaseOperator):
         name: str,
         description: str | None = None,
         tags: dict | None = None,
-        aws_conn_id: str = DEFAULT_CONN_ID,
         **kwargs,
     ):
-        super().__init__(config={}, aws_conn_id=aws_conn_id, **kwargs)
+        kwargs["config"] = {}
+        super().__init__(**kwargs)
         self.name = name
         self.description = description
         self.tags = tags or {}
@@ -1542,7 +1645,7 @@ class SageMakerCreateExperimentOperator(SageMakerBaseOperator):
         return arn
 
 
-class SageMakerCreateNotebookOperator(BaseOperator):
+class SageMakerCreateNotebookOperator(_BaseSageMakerOperator):
     """
     Create a SageMaker notebook.
 
@@ -1563,7 +1666,16 @@ class SageMakerCreateNotebookOperator(BaseOperator):
     :param root_access: Whether to give the notebook instance root access to the Amazon S3 bucket.
     :param wait_for_completion: Whether or not to wait for the notebook to be InService before returning
     :param create_instance_kwargs: Additional configuration options for the create call.
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     :return: The ARN of the created notebook.
     """
@@ -1594,9 +1706,8 @@ class SageMakerCreateNotebookOperator(BaseOperator):
         lifecycle_config_name: str | None = None,
         direct_internet_access: str | None = None,
         root_access: str | None = None,
-        create_instance_kwargs: dict[str, Any] = {},
+        create_instance_kwargs: dict[str, Any] | None = None,
         wait_for_completion: bool = True,
-        aws_conn_id: str = "aws_default",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1609,19 +1720,12 @@ class SageMakerCreateNotebookOperator(BaseOperator):
         self.direct_internet_access = direct_internet_access
         self.root_access = root_access
         self.wait_for_completion = wait_for_completion
-        self.aws_conn_id = aws_conn_id
-        self.create_instance_kwargs = create_instance_kwargs
+        self.create_instance_kwargs = create_instance_kwargs or {}
 
         if self.create_instance_kwargs.get("tags") is not None:
             self.create_instance_kwargs["tags"] = format_tags(self.create_instance_kwargs["tags"])
 
-    @cached_property
-    def hook(self) -> SageMakerHook:
-        """Create and return SageMakerHook."""
-        return SageMakerHook(aws_conn_id=self.aws_conn_id)
-
     def execute(self, context: Context):
-
         create_notebook_instance_kwargs = {
             "NotebookInstanceName": self.instance_name,
             "InstanceType": self.instance_type,
@@ -1648,7 +1752,7 @@ class SageMakerCreateNotebookOperator(BaseOperator):
         return response["NotebookInstanceArn"]
 
 
-class SageMakerStopNotebookOperator(BaseOperator):
+class SageMakerStopNotebookOperator(_BaseSageMakerOperator):
     """
     Stop a notebook instance.
 
@@ -1658,29 +1762,26 @@ class SageMakerStopNotebookOperator(BaseOperator):
 
     :param instance_name: The name of the notebook instance to stop.
     :param wait_for_completion: Whether or not to wait for the notebook to be stopped before returning
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("instance_name", "wait_for_completion")
 
     ui_color = "#ff7300"
 
-    def __init__(
-        self,
-        instance_name: str,
-        wait_for_completion: bool = True,
-        aws_conn_id: str = "aws_default",
-        **kwargs,
-    ):
+    def __init__(self, instance_name: str, wait_for_completion: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.instance_name = instance_name
         self.wait_for_completion = wait_for_completion
-        self.aws_conn_id = aws_conn_id
-
-    @cached_property
-    def hook(self) -> SageMakerHook:
-        """Create and return SageMakerHook."""
-        return SageMakerHook(aws_conn_id=self.aws_conn_id)
 
     def execute(self, context):
         self.log.info("Stopping SageMaker notebook %s.", self.instance_name)
@@ -1693,7 +1794,7 @@ class SageMakerStopNotebookOperator(BaseOperator):
             )
 
 
-class SageMakerDeleteNotebookOperator(BaseOperator):
+class SageMakerDeleteNotebookOperator(_BaseSageMakerOperator):
     """
     Delete a notebook instance.
 
@@ -1703,29 +1804,26 @@ class SageMakerDeleteNotebookOperator(BaseOperator):
 
     :param instance_name: The name of the notebook instance to delete.
     :param wait_for_completion: Whether or not to wait for the notebook to delete before returning.
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("instance_name", "wait_for_completion")
 
     ui_color = "#ff7300"
 
-    def __init__(
-        self,
-        instance_name: str,
-        wait_for_completion: bool = True,
-        aws_conn_id: str = "aws_default",
-        **kwargs,
-    ):
+    def __init__(self, instance_name: str, wait_for_completion: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.instance_name = instance_name
-        self.aws_conn_id = aws_conn_id
         self.wait_for_completion = wait_for_completion
-
-    @cached_property
-    def hook(self) -> SageMakerHook:
-        """Create and return SageMakerHook."""
-        return SageMakerHook(aws_conn_id=self.aws_conn_id)
 
     def execute(self, context):
         self.log.info("Deleting SageMaker notebook %s....", self.instance_name)
@@ -1738,7 +1836,7 @@ class SageMakerDeleteNotebookOperator(BaseOperator):
             )
 
 
-class SageMakerStartNoteBookOperator(BaseOperator):
+class SageMakerStartNoteBookOperator(_BaseSageMakerOperator):
     """
     Start a notebook instance.
 
@@ -1748,29 +1846,26 @@ class SageMakerStartNoteBookOperator(BaseOperator):
 
     :param instance_name: The name of the notebook instance to start.
     :param wait_for_completion: Whether or not to wait for notebook to be InService before returning
-    :param aws_conn_id: The AWS connection ID to use.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("instance_name", "wait_for_completion")
 
     ui_color = "#ff7300"
 
-    def __init__(
-        self,
-        instance_name: str,
-        wait_for_completion: bool = True,
-        aws_conn_id: str = "aws_default",
-        **kwargs,
-    ):
+    def __init__(self, instance_name: str, wait_for_completion: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.instance_name = instance_name
-        self.aws_conn_id = aws_conn_id
         self.wait_for_completion = wait_for_completion
-
-    @cached_property
-    def hook(self) -> SageMakerHook:
-        """Create and return SageMakerHook."""
-        return SageMakerHook(aws_conn_id=self.aws_conn_id)
 
     def execute(self, context):
         self.log.info("Starting SageMaker notebook %s....", self.instance_name)

@@ -17,20 +17,20 @@
 # under the License.
 from __future__ import annotations
 
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Sequence
 
-from airflow import AirflowException
 from airflow.configuration import conf
+from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.athena import AthenaHook
 from airflow.providers.amazon.aws.triggers.athena import AthenaTrigger
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class AthenaOperator(BaseOperator):
+class AthenaOperator(Boto3Mixin[AthenaHook], BaseOperator):
     """
     An operator that submits a presto query to athena.
 
@@ -44,7 +44,6 @@ class AthenaOperator(BaseOperator):
     :param query: Presto to be run on athena. (templated)
     :param database: Database to select. (templated)
     :param output_location: s3 path to write the query results into. (templated)
-    :param aws_conn_id: aws connection to use
     :param client_request_token: Unique token created by user to avoid multiple executions of same query
     :param workgroup: Athena workgroup in which query will be run. (templated)
     :param query_execution_context: Context in which query need to be run
@@ -54,12 +53,23 @@ class AthenaOperator(BaseOperator):
         To limit task execution time, use execution_timeout.
     :param log_query: Whether to log athena query and other execution params when it's executed.
         Defaults to *True*.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     ui_color = "#44b5e2"
     template_fields: Sequence[str] = ("query", "database", "output_location", "workgroup")
     template_ext: Sequence[str] = (".sql",)
     template_fields_renderers = {"query": "sql"}
+    aws_hook_class = AthenaHook
 
     def __init__(
         self,
@@ -67,7 +77,6 @@ class AthenaOperator(BaseOperator):
         query: str,
         database: str,
         output_location: str,
-        aws_conn_id: str = "aws_default",
         client_request_token: str | None = None,
         workgroup: str = "primary",
         query_execution_context: dict[str, str] | None = None,
@@ -82,7 +91,6 @@ class AthenaOperator(BaseOperator):
         self.query = query
         self.database = database
         self.output_location = output_location
-        self.aws_conn_id = aws_conn_id
         self.client_request_token = client_request_token
         self.workgroup = workgroup
         self.query_execution_context = query_execution_context or {}
@@ -93,10 +101,9 @@ class AthenaOperator(BaseOperator):
         self.log_query: bool = log_query
         self.deferrable = deferrable
 
-    @cached_property
-    def hook(self) -> AthenaHook:
-        """Create and return an AthenaHook."""
-        return AthenaHook(self.aws_conn_id, log_query=self.log_query)
+    @property
+    def _hook_parameters(self):
+        return {**super()._hook_parameters, "log_query": self.log_query}
 
     def execute(self, context: Context) -> str | None:
         """Run Presto Query on Athena."""

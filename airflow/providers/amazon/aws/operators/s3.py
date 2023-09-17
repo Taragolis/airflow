@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Sequence
 from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 from airflow.utils.helpers import exactly_one
 
 if TYPE_CHECKING:
@@ -35,7 +36,13 @@ if TYPE_CHECKING:
 BUCKET_DOES_NOT_EXIST_MSG = "Bucket with name: %s doesn't exist"
 
 
-class S3CreateBucketOperator(BaseOperator):
+class _BaseS3Operator(Boto3Mixin[S3Hook], BaseOperator):
+    """Base Amazon S3 Operator."""
+
+    aws_hook_class = S3Hook
+
+
+class S3CreateBucketOperator(_BaseS3Operator):
     """
     This operator creates an S3 bucket.
 
@@ -49,34 +56,28 @@ class S3CreateBucketOperator(BaseOperator):
         running Airflow in a distributed manner and aws_conn_id is None or
         empty, then default boto3 configuration would be used (and must be
         maintained on each worker node).
-    :param region_name: AWS region_name. If not specified fetched from connection.
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("bucket_name",)
 
-    def __init__(
-        self,
-        *,
-        bucket_name: str,
-        aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
-        **kwargs,
-    ) -> None:
+    def __init__(self, *, bucket_name: str, **kwargs):
         super().__init__(**kwargs)
         self.bucket_name = bucket_name
-        self.region_name = region_name
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)
-        if not s3_hook.check_for_bucket(self.bucket_name):
-            s3_hook.create_bucket(bucket_name=self.bucket_name, region_name=self.region_name)
+        if not self.hook.check_for_bucket(self.bucket_name):
+            self.hook.create_bucket(bucket_name=self.bucket_name, region_name=self.region_name)
             self.log.info("Created bucket with name: %s", self.bucket_name)
         else:
             self.log.info("Bucket with name: %s already exists", self.bucket_name)
 
 
-class S3DeleteBucketOperator(BaseOperator):
+class S3DeleteBucketOperator(_BaseS3Operator):
     """
     This operator deletes an S3 bucket.
 
@@ -91,32 +92,29 @@ class S3DeleteBucketOperator(BaseOperator):
         running Airflow in a distributed manner and aws_conn_id is None or
         empty, then default boto3 configuration would be used (and must be
         maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("bucket_name",)
 
-    def __init__(
-        self,
-        bucket_name: str,
-        force_delete: bool = False,
-        aws_conn_id: str | None = "aws_default",
-        **kwargs,
-    ) -> None:
+    def __init__(self, bucket_name: str, force_delete: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.bucket_name = bucket_name
         self.force_delete = force_delete
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id)
-        if s3_hook.check_for_bucket(self.bucket_name):
-            s3_hook.delete_bucket(bucket_name=self.bucket_name, force_delete=self.force_delete)
+        if self.hook.check_for_bucket(self.bucket_name):
+            self.hook.delete_bucket(bucket_name=self.bucket_name, force_delete=self.force_delete)
             self.log.info("Deleted bucket with name: %s", self.bucket_name)
         else:
             self.log.info("Bucket with name: %s doesn't exist", self.bucket_name)
 
 
-class S3GetBucketTaggingOperator(BaseOperator):
+class S3GetBucketTaggingOperator(_BaseS3Operator):
     """
     This operator gets tagging from an S3 bucket.
 
@@ -130,27 +128,29 @@ class S3GetBucketTaggingOperator(BaseOperator):
         running Airflow in a distributed manner and aws_conn_id is None or
         empty, then default boto3 configuration would be used (and must be
         maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("bucket_name",)
 
-    def __init__(self, bucket_name: str, aws_conn_id: str | None = "aws_default", **kwargs) -> None:
+    def __init__(self, bucket_name: str, **kwargs):
         super().__init__(**kwargs)
         self.bucket_name = bucket_name
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id)
-
-        if s3_hook.check_for_bucket(self.bucket_name):
+        if self.hook.check_for_bucket(self.bucket_name):
             self.log.info("Getting tags for bucket %s", self.bucket_name)
-            return s3_hook.get_bucket_tagging(self.bucket_name)
+            return self.hook.get_bucket_tagging(self.bucket_name)
         else:
             self.log.warning(BUCKET_DOES_NOT_EXIST_MSG, self.bucket_name)
             return None
 
 
-class S3PutBucketTaggingOperator(BaseOperator):
+class S3PutBucketTaggingOperator(_BaseS3Operator):
     """
     This operator puts tagging for an S3 bucket.
 
@@ -169,6 +169,11 @@ class S3PutBucketTaggingOperator(BaseOperator):
         running Airflow in a distributed manner and aws_conn_id is None or
         empty, then the default boto3 configuration would be used (and must be
         maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("bucket_name",)
@@ -180,7 +185,6 @@ class S3PutBucketTaggingOperator(BaseOperator):
         key: str | None = None,
         value: str | None = None,
         tag_set: dict | list[dict[str, str]] | None = None,
-        aws_conn_id: str | None = "aws_default",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -188,14 +192,11 @@ class S3PutBucketTaggingOperator(BaseOperator):
         self.value = value
         self.tag_set = tag_set
         self.bucket_name = bucket_name
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id)
-
-        if s3_hook.check_for_bucket(self.bucket_name):
+        if self.hook.check_for_bucket(self.bucket_name):
             self.log.info("Putting tags for bucket %s", self.bucket_name)
-            return s3_hook.put_bucket_tagging(
+            return self.hook.put_bucket_tagging(
                 key=self.key, value=self.value, tag_set=self.tag_set, bucket_name=self.bucket_name
             )
         else:
@@ -203,7 +204,7 @@ class S3PutBucketTaggingOperator(BaseOperator):
             return None
 
 
-class S3DeleteBucketTaggingOperator(BaseOperator):
+class S3DeleteBucketTaggingOperator(_BaseS3Operator):
     """
     This operator deletes tagging from an S3 bucket.
 
@@ -217,27 +218,29 @@ class S3DeleteBucketTaggingOperator(BaseOperator):
         running Airflow in a distributed manner and aws_conn_id is None or
         empty, then default boto3 configuration would be used (and must be
         maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("bucket_name",)
 
-    def __init__(self, bucket_name: str, aws_conn_id: str | None = "aws_default", **kwargs) -> None:
+    def __init__(self, bucket_name: str, **kwargs) -> None:
         super().__init__(**kwargs)
         self.bucket_name = bucket_name
-        self.aws_conn_id = aws_conn_id
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id)
-
-        if s3_hook.check_for_bucket(self.bucket_name):
+        if self.hook.check_for_bucket(self.bucket_name):
             self.log.info("Deleting tags for bucket %s", self.bucket_name)
-            return s3_hook.delete_bucket_tagging(self.bucket_name)
+            return self.hook.delete_bucket_tagging(self.bucket_name)
         else:
             self.log.warning(BUCKET_DOES_NOT_EXIST_MSG, self.bucket_name)
             return None
 
 
-class S3CopyObjectOperator(BaseOperator):
+class S3CopyObjectOperator(_BaseS3Operator):
     """
     Creates a copy of an object that is already stored in S3.
 
@@ -249,32 +252,25 @@ class S3CopyObjectOperator(BaseOperator):
         :ref:`howto/operator:S3CopyObjectOperator`
 
     :param source_bucket_key: The key of the source object. (templated)
-
         It can be either full s3:// style url or relative path from root level.
-
         When it's specified as a full s3:// url, please omit source_bucket_name.
     :param dest_bucket_key: The key of the object to copy to. (templated)
-
         The convention to specify `dest_bucket_key` is the same as `source_bucket_key`.
     :param source_bucket_name: Name of the S3 bucket where the source object is in. (templated)
-
         It should be omitted when `source_bucket_key` is provided as a full s3:// url.
     :param dest_bucket_name: Name of the S3 bucket to where the object is copied. (templated)
-
         It should be omitted when `dest_bucket_key` is provided as a full s3:// url.
     :param source_version_id: Version ID of the source object (OPTIONAL)
-    :param aws_conn_id: Connection id of the S3 connection to use
-    :param verify: Whether or not to verify SSL certificates for S3 connection.
-        By default SSL certificates are verified.
-
-        You can provide the following values:
-
-        - False: do not validate SSL certificates. SSL will still be used,
-                 but SSL certificates will not be
-                 verified.
-        - path/to/cert/bundle.pem: A filename of the CA cert bundle to uses.
-                 You can specify this argument if you want to use a different
-                 CA cert bundle than the one used by botocore.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     :param acl_policy: String specifying the canned ACL policy for the file being
         uploaded to the S3 bucket.
     """
@@ -294,8 +290,6 @@ class S3CopyObjectOperator(BaseOperator):
         source_bucket_name: str | None = None,
         dest_bucket_name: str | None = None,
         source_version_id: str | None = None,
-        aws_conn_id: str = "aws_default",
-        verify: str | bool | None = None,
         acl_policy: str | None = None,
         **kwargs,
     ):
@@ -306,13 +300,10 @@ class S3CopyObjectOperator(BaseOperator):
         self.source_bucket_name = source_bucket_name
         self.dest_bucket_name = dest_bucket_name
         self.source_version_id = source_version_id
-        self.aws_conn_id = aws_conn_id
-        self.verify = verify
         self.acl_policy = acl_policy
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id, verify=self.verify)
-        s3_hook.copy_object(
+        self.hook.copy_object(
             self.source_bucket_key,
             self.dest_bucket_key,
             self.source_bucket_name,
@@ -322,7 +313,7 @@ class S3CopyObjectOperator(BaseOperator):
         )
 
 
-class S3CreateObjectOperator(BaseOperator):
+class S3CreateObjectOperator(_BaseS3Operator):
     """
     Creates a new object from `data` as string or bytes.
 
@@ -345,19 +336,16 @@ class S3CreateObjectOperator(BaseOperator):
         It should be specified only when `data` is provided as string.
     :param compression: Type of compression to use, currently only gzip is supported.
         It can be specified only when `data` is provided as string.
-    :param aws_conn_id: Connection id of the S3 connection to use
-    :param verify: Whether or not to verify SSL certificates for S3 connection.
-        By default SSL certificates are verified.
-
-        You can provide the following values:
-
-        - False: do not validate SSL certificates. SSL will still be used,
-                 but SSL certificates will not be
-                 verified.
-        - path/to/cert/bundle.pem: A filename of the CA cert bundle to uses.
-                 You can specify this argument if you want to use a different
-                 CA cert bundle than the one used by botocore.
-
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("s3_bucket", "s3_key", "data")
@@ -373,12 +361,9 @@ class S3CreateObjectOperator(BaseOperator):
         acl_policy: str | None = None,
         encoding: str | None = None,
         compression: str | None = None,
-        aws_conn_id: str = "aws_default",
-        verify: str | bool | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
-
         self.s3_bucket = s3_bucket
         self.s3_key = s3_key
         self.data = data
@@ -387,16 +372,15 @@ class S3CreateObjectOperator(BaseOperator):
         self.acl_policy = acl_policy
         self.encoding = encoding
         self.compression = compression
-        self.aws_conn_id = aws_conn_id
-        self.verify = verify
 
     def execute(self, context: Context):
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id, verify=self.verify)
 
-        s3_bucket, s3_key = s3_hook.get_s3_bucket_key(self.s3_bucket, self.s3_key, "dest_bucket", "dest_key")
+        s3_bucket, s3_key = self.hook.get_s3_bucket_key(
+            self.s3_bucket, self.s3_key, "dest_bucket", "dest_key"
+        )
 
         if isinstance(self.data, str):
-            s3_hook.load_string(
+            self.hook.load_string(
                 self.data,
                 s3_key,
                 s3_bucket,
@@ -407,10 +391,10 @@ class S3CreateObjectOperator(BaseOperator):
                 self.compression,
             )
         else:
-            s3_hook.load_bytes(self.data, s3_key, s3_bucket, self.replace, self.encrypt, self.acl_policy)
+            self.hook.load_bytes(self.data, s3_key, s3_bucket, self.replace, self.encrypt, self.acl_policy)
 
 
-class S3DeleteObjectsOperator(BaseOperator):
+class S3DeleteObjectsOperator(_BaseS3Operator):
     """
     To enable users to delete single object or multiple objects from a bucket using a single HTTP request.
 
@@ -429,40 +413,25 @@ class S3DeleteObjectsOperator(BaseOperator):
 
     :param prefix: Prefix of objects to delete. (templated)
         All objects matching this prefix in the bucket will be deleted.
-    :param aws_conn_id: Connection id of the S3 connection to use
-    :param verify: Whether or not to verify SSL certificates for S3 connection.
-        By default SSL certificates are verified.
-
-        You can provide the following values:
-
-        - ``False``: do not validate SSL certificates. SSL will still be used,
-                 but SSL certificates will not be
-                 verified.
-        - ``path/to/cert/bundle.pem``: A filename of the CA cert bundle to uses.
-                 You can specify this argument if you want to use a different
-                 CA cert bundle than the one used by botocore.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("keys", "bucket", "prefix")
 
-    def __init__(
-        self,
-        *,
-        bucket: str,
-        keys: str | list | None = None,
-        prefix: str | None = None,
-        aws_conn_id: str = "aws_default",
-        verify: str | bool | None = None,
-        **kwargs,
-    ):
-
+    def __init__(self, *, bucket: str, keys: str | list | None = None, prefix: str | None = None, **kwargs):
         super().__init__(**kwargs)
         self.bucket = bucket
         self.keys = keys
         self.prefix = prefix
-        self.aws_conn_id = aws_conn_id
-        self.verify = verify
-
         if not exactly_one(prefix is None, keys is None):
             raise AirflowException("Either keys or prefix should be set.")
 
@@ -472,11 +441,10 @@ class S3DeleteObjectsOperator(BaseOperator):
 
         if isinstance(self.keys, (list, str)) and not self.keys:
             return
-        s3_hook = S3Hook(aws_conn_id=self.aws_conn_id, verify=self.verify)
 
-        keys = self.keys or s3_hook.list_keys(bucket_name=self.bucket, prefix=self.prefix)
+        keys = self.keys or self.hook.list_keys(bucket_name=self.bucket, prefix=self.prefix)
         if keys:
-            s3_hook.delete_objects(bucket=self.bucket, keys=keys)
+            self.hook.delete_objects(bucket=self.bucket, keys=keys)
 
 
 class S3FileTransformOperator(BaseOperator):
@@ -610,7 +578,7 @@ class S3FileTransformOperator(BaseOperator):
             self.log.info("Upload successful")
 
 
-class S3ListOperator(BaseOperator):
+class S3ListOperator(_BaseS3Operator):
     """
     List all objects from the bucket with the given string prefix in name.
 
@@ -625,19 +593,17 @@ class S3ListOperator(BaseOperator):
     :param prefix: Prefix string to filters the objects whose name begin with
         such prefix. (templated)
     :param delimiter: the delimiter marks key hierarchy. (templated)
-    :param aws_conn_id: The connection ID to use when connecting to S3 storage.
-    :param verify: Whether or not to verify SSL certificates for S3 connection.
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     :param apply_wildcard: whether to treat '*' as a wildcard or a plain symbol in the prefix.
-        By default SSL certificates are verified.
-        You can provide the following values:
-
-        - ``False``: do not validate SSL certificates. SSL will still be used
-                 (unless use_ssl is False), but SSL certificates will not be
-                 verified.
-        - ``path/to/cert/bundle.pem``: A filename of the CA cert bundle to uses.
-                 You can specify this argument if you want to use a different
-                 CA cert bundle than the one used by botocore.
-
 
     **Example**:
         The following operator would list all the files
@@ -662,8 +628,6 @@ class S3ListOperator(BaseOperator):
         bucket: str,
         prefix: str = "",
         delimiter: str = "",
-        aws_conn_id: str = "aws_default",
-        verify: str | bool | None = None,
         apply_wildcard: bool = False,
         **kwargs,
     ):
@@ -671,13 +635,9 @@ class S3ListOperator(BaseOperator):
         self.bucket = bucket
         self.prefix = prefix
         self.delimiter = delimiter
-        self.aws_conn_id = aws_conn_id
-        self.verify = verify
         self.apply_wildcard = apply_wildcard
 
     def execute(self, context: Context):
-        hook = S3Hook(aws_conn_id=self.aws_conn_id, verify=self.verify)
-
         self.log.info(
             "Getting the list of files from bucket: %s in prefix: %s (Delimiter %s)",
             self.bucket,
@@ -685,7 +645,7 @@ class S3ListOperator(BaseOperator):
             self.delimiter,
         )
 
-        return hook.list_keys(
+        return self.hook.list_keys(
             bucket_name=self.bucket,
             prefix=self.prefix,
             delimiter=self.delimiter,
@@ -693,7 +653,7 @@ class S3ListOperator(BaseOperator):
         )
 
 
-class S3ListPrefixesOperator(BaseOperator):
+class S3ListPrefixesOperator(_BaseS3Operator):
     """
     List all subfolders from the bucket with the given string prefix in name.
 
@@ -708,18 +668,16 @@ class S3ListPrefixesOperator(BaseOperator):
     :param prefix: Prefix string to filter the subfolders whose name begin with
         such prefix. (templated)
     :param delimiter: the delimiter marks subfolder hierarchy. (templated)
-    :param aws_conn_id: The connection ID to use when connecting to S3 storage.
-    :param verify: Whether or not to verify SSL certificates for S3 connection.
-        By default SSL certificates are verified.
-        You can provide the following values:
-
-        - ``False``: do not validate SSL certificates. SSL will still be used
-                 (unless use_ssl is False), but SSL certificates will not be
-                 verified.
-        - ``path/to/cert/bundle.pem``: A filename of the CA cert bundle to uses.
-                 You can specify this argument if you want to use a different
-                 CA cert bundle than the one used by botocore.
-
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
 
     **Example**:
         The following operator would list all the subfolders
@@ -737,31 +695,17 @@ class S3ListPrefixesOperator(BaseOperator):
     template_fields: Sequence[str] = ("bucket", "prefix", "delimiter")
     ui_color = "#ffd700"
 
-    def __init__(
-        self,
-        *,
-        bucket: str,
-        prefix: str,
-        delimiter: str,
-        aws_conn_id: str = "aws_default",
-        verify: str | bool | None = None,
-        **kwargs,
-    ):
+    def __init__(self, *, bucket: str, prefix: str, delimiter: str, **kwargs):
         super().__init__(**kwargs)
         self.bucket = bucket
         self.prefix = prefix
         self.delimiter = delimiter
-        self.aws_conn_id = aws_conn_id
-        self.verify = verify
 
     def execute(self, context: Context):
-        hook = S3Hook(aws_conn_id=self.aws_conn_id, verify=self.verify)
-
         self.log.info(
             "Getting the list of subfolders from bucket: %s in prefix: %s (Delimiter %s)",
             self.bucket,
             self.prefix,
             self.delimiter,
         )
-
-        return hook.list_prefixes(bucket_name=self.bucket, prefix=self.prefix, delimiter=self.delimiter)
+        return self.hook.list_prefixes(bucket_name=self.bucket, prefix=self.prefix, delimiter=self.delimiter)

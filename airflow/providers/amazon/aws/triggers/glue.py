@@ -41,7 +41,7 @@ class GlueJobCompleteTrigger(BaseTrigger):
         job_name: str,
         run_id: str,
         verbose: bool,
-        aws_conn_id: str,
+        aws_conn_id: str | None,
         job_poll_interval: int | float,
     ):
         super().__init__()

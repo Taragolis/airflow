@@ -21,12 +21,19 @@ from typing import TYPE_CHECKING, Sequence
 
 from airflow.models import BaseOperator
 from airflow.providers.amazon.aws.hooks.glacier import GlacierHook
+from airflow.providers.amazon.aws.utils.mixin import Boto3Mixin
 
 if TYPE_CHECKING:
     from airflow.utils.context import Context
 
 
-class GlacierCreateJobOperator(BaseOperator):
+class _BaseGlacierOperator(Boto3Mixin[GlacierHook], BaseOperator):
+    """Base Amazon S3 Glacier Operator."""
+
+    aws_hook_class = GlacierHook
+
+
+class GlacierCreateJobOperator(_BaseGlacierOperator):
     """
     Initiate an Amazon Glacier inventory-retrieval job.
 
@@ -34,29 +41,30 @@ class GlacierCreateJobOperator(BaseOperator):
         For more information on how to use this operator, take a look at the guide:
         :ref:`howto/operator:GlacierCreateJobOperator`
 
-    :param aws_conn_id: The reference to the AWS connection details
     :param vault_name: the Glacier vault on which job is executed
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("vault_name",)
 
-    def __init__(
-        self,
-        *,
-        aws_conn_id="aws_default",
-        vault_name: str,
-        **kwargs,
-    ):
+    def __init__(self, *, vault_name: str, **kwargs):
         super().__init__(**kwargs)
-        self.aws_conn_id = aws_conn_id
         self.vault_name = vault_name
 
     def execute(self, context: Context):
-        hook = GlacierHook(aws_conn_id=self.aws_conn_id)
-        return hook.retrieve_inventory(vault_name=self.vault_name)
+        return self.hook.retrieve_inventory(vault_name=self.vault_name)
 
 
-class GlacierUploadArchiveOperator(BaseOperator):
+class GlacierUploadArchiveOperator(_BaseGlacierOperator):
     """
     This operator add an archive to an Amazon S3 Glacier vault.
 
@@ -71,7 +79,16 @@ class GlacierUploadArchiveOperator(BaseOperator):
     :param archive_description: The description of the archive you are uploading
     :param account_id: (Optional) AWS account ID of the account that owns the vault.
         Defaults to the credentials used to sign the request
-    :param aws_conn_id: The reference to the AWS connection details
+    :param aws_conn_id: The Airflow connection used for AWS credentials.
+        If this is None or empty then the default boto3 behaviour is used. If
+        running Airflow in a distributed manner and aws_conn_id is None or
+        empty, then default boto3 configuration would be used (and must be
+        maintained on each worker node).
+    :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
+    :param verify: Whether or not to verify SSL certificates. See:
+        https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
+    :param botocore_config: Configuration for botocore client. See:
+        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
 
     template_fields: Sequence[str] = ("vault_name",)
@@ -84,11 +101,9 @@ class GlacierUploadArchiveOperator(BaseOperator):
         checksum: str | None = None,
         archive_description: str | None = None,
         account_id: str | None = None,
-        aws_conn_id="aws_default",
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.aws_conn_id = aws_conn_id
         self.account_id = account_id
         self.vault_name = vault_name
         self.body = body
@@ -96,8 +111,7 @@ class GlacierUploadArchiveOperator(BaseOperator):
         self.archive_description = archive_description
 
     def execute(self, context: Context):
-        hook = GlacierHook(aws_conn_id=self.aws_conn_id)
-        return hook.get_conn().upload_archive(
+        return self.hook.get_conn().upload_archive(
             accountId=self.account_id,
             vaultName=self.vault_name,
             archiveDescription=self.archive_description,

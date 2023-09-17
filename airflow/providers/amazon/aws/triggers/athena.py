@@ -43,7 +43,7 @@ class AthenaTrigger(AwsBaseWaiterTrigger):
         query_execution_id: str,
         waiter_delay: int,
         waiter_max_attempts: int,
-        aws_conn_id: str,
+        aws_conn_id: str | None,
     ):
         super().__init__(
             serialized_fields={"query_execution_id": query_execution_id},
