@@ -22,7 +22,6 @@ from datetime import datetime, time
 import pendulum
 import pytest
 import time_machine
-from pendulum.tz.timezone import Timezone
 
 from airflow.exceptions import TaskDeferred
 from airflow.models.dag import DAG
@@ -32,7 +31,7 @@ from airflow.utils import timezone
 
 DEFAULT_TIMEZONE = "Asia/Singapore"  # UTC+08:00
 DEFAULT_DATE_WO_TZ = datetime(2015, 1, 1)
-DEFAULT_DATE_WITH_TZ = datetime(2015, 1, 1, tzinfo=Timezone(DEFAULT_TIMEZONE))
+DEFAULT_DATE_WITH_TZ = datetime(2015, 1, 1, tzinfo=timezone.parse_timezone(DEFAULT_TIMEZONE))
 
 
 class TestTimeSensor:
@@ -46,7 +45,7 @@ class TestTimeSensor:
     )
     @time_machine.travel(timezone.datetime(2020, 1, 1, 23, 0).replace(tzinfo=timezone.utc))
     def test_timezone(self, default_timezone, start_date, expected, monkeypatch):
-        monkeypatch.setattr("airflow.settings.TIMEZONE", Timezone(default_timezone))
+        monkeypatch.setattr("airflow.settings.TIMEZONE", timezone.parse_timezone(DEFAULT_TIMEZONE))
         dag = DAG("test", default_args={"start_date": start_date})
         op = TimeSensor(task_id="test", target_time=time(10, 0), dag=dag)
         assert op.poke(None) == expected
