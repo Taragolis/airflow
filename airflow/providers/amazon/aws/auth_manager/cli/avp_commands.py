@@ -25,9 +25,16 @@ from typing import TYPE_CHECKING
 import boto3
 
 from airflow.configuration import conf
+from airflow.exceptions import AirflowOptionalProviderFeatureException
 from airflow.providers.amazon.aws.auth_manager.constants import CONF_REGION_NAME_KEY, CONF_SECTION_NAME
 from airflow.utils import cli as cli_utils
-from airflow.utils.providers_configuration_loader import providers_configuration_loaded
+
+try:
+    from airflow.utils.providers_configuration_loader import providers_configuration_loaded
+except ImportError:
+    raise AirflowOptionalProviderFeatureException(
+        "This feature is only available in Airflow versions >= 2.7.0"
+    )
 
 if TYPE_CHECKING:
     from botocore.client import BaseClient
@@ -46,7 +53,8 @@ def init_avp(args):
 
     if not is_new_policy_store:
         print(
-            f"Since an existing policy store with description '{args.policy_store_description}' has been found in Amazon Verified Permissions, "
+            f"Since an existing policy store with description '{args.policy_store_description}' "
+            "has been found in Amazon Verified Permissions, "
             "the CLI nade no changes to this policy store for security reasons. "
             "Any modification to this policy store must be done manually.",
         )
@@ -100,7 +108,8 @@ def _create_policy_store(client: BaseClient, args) -> tuple[str | None, bool]:
 
     if len(existing_policy_stores) > 0:
         print(
-            f"There is already a policy store with description '{args.policy_store_description}' in Amazon Verified Permissions: '{existing_policy_stores[0]['policyStoreId']}'."
+            f"There is already a policy store with description '{args.policy_store_description}' "
+            f"in Amazon Verified Permissions: '{existing_policy_stores[0]['policyStoreId']}'."
         )
         return existing_policy_stores[0]["policyStoreId"], False
     else:
