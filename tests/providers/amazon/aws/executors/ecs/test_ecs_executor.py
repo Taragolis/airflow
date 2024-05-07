@@ -56,6 +56,8 @@ from airflow.utils.state import State, TaskInstanceState
 from airflow.utils.timezone import utcnow
 from tests.test_utils.config import conf_vars
 
+# We mark AWS ECS Executor tests as DB test for avoid side effect between test cases
+# for now it is expected to be run in the sequential order and might fail on xdist workers
 pytestmark = pytest.mark.db_test
 
 ARN1 = "arn1"

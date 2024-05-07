@@ -43,6 +43,10 @@ from airflow.utils.helpers import convert_camel_to_snake
 from airflow.utils.state import State
 from tests.test_utils.config import conf_vars
 
+# We mark AWS Batch Executor tests as DB test for avoid side effect between test cases
+# for now it is expected to be run in the sequential order and might fail on xdist workers
+pytestmark = pytest.mark.db_test
+
 ARN1 = "arn1"
 
 MOCK_JOB_ID = "batch-job-id"
